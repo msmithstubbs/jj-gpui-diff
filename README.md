@@ -2,7 +2,7 @@
 
 A small native macOS diff viewer built with Zed's public **GPUI** crate. It reads the Jujutsu working-copy changeset (`@` compared with its parent), then computes each text-file diff locally with `imara-diff`'s `Histogram` algorithm and line post-processing—the same diff engine and processing direction used by Zed.
 
-The display is a scrollable unified or split diff: deleted lines are red, added lines are green, and long unchanged spans are collapsed to three lines of context on each side. Each file can be collapsed independently or marked as accepted; accepting a file collapses it without locking its disclosure control. **Refresh** reruns Jujutsu and recomputes the view. The interface uses the [GitHub Light and Dark palettes from the GitHub Zed theme](https://github.com/PyaeSoneAungRgn/github-zed-theme), with Auto following the macOS appearance setting.
+The display is a scrollable unified or split diff: deleted lines are red, added lines are green, changed words use a stronger shade, and long unchanged spans are collapsed to three lines of context on each side. Each file can be collapsed independently or marked as accepted; accepting a file collapses it without locking its disclosure control. **Refresh** reruns Jujutsu and recomputes the view. The interface uses the [GitHub Light and Dark palettes from the GitHub Zed theme](https://github.com/PyaeSoneAungRgn/github-zed-theme), with Auto following the macOS appearance setting.
 
 GPUI renders the window through Metal on macOS. Diff lines use GPUI's virtualized uniform list, so layout and painting are limited to the visible rows plus a small overdraw area. Use a `--release` build when evaluating scrolling performance; debug builds are substantially slower.
 

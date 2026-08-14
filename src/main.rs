@@ -8,8 +8,8 @@ use std::{
 
 use gpui::{
     actions, div, px, rgb, rgba, size, uniform_list, App, Application, Bounds, Context,
-    IntoElement, KeyBinding, ListHorizontalSizingBehavior, Menu, MenuItem, Render, Window,
-    WindowAppearance, WindowBounds, WindowOptions,
+    HighlightStyle, IntoElement, KeyBinding, ListHorizontalSizingBehavior, Menu, MenuItem, Render,
+    StyledText, Window, WindowAppearance, WindowBounds, WindowOptions,
 };
 use gpui::prelude::*;
 use imara_diff::{Algorithm, Diff, InternedInput};
@@ -40,6 +40,7 @@ struct DiffRow {
     old_line: Option<usize>,
     new_line: Option<usize>,
     text: String,
+    word_highlights: Vec<std::ops::Range<usize>>,
 }
 
 #[derive(Debug)]
@@ -100,8 +101,10 @@ struct ThemePalette {
     accent_text: gpui::Rgba,
     created: gpui::Rgba,
     created_background: gpui::Rgba,
+    created_emphasis_background: gpui::Rgba,
     deleted: gpui::Rgba,
     deleted_background: gpui::Rgba,
+    deleted_emphasis_background: gpui::Rgba,
 }
 
 impl ThemePalette {
@@ -122,8 +125,10 @@ impl ThemePalette {
             accent_text: rgb(0xffffff),
             created: rgb(0x1a7f37),
             created_background: rgb(0xdafbe1),
+            created_emphasis_background: rgb(0xaceebb),
             deleted: rgb(0xd1242f),
             deleted_background: rgb(0xffebe9),
+            deleted_emphasis_background: rgb(0xffc1c0),
         }
     }
 
@@ -143,8 +148,10 @@ impl ThemePalette {
             accent_text: rgb(0xffffff),
             created: rgb(0x3fb950),
             created_background: rgba(0x2ea04326),
+            created_emphasis_background: rgba(0x2ea04366),
             deleted: rgb(0xf85149),
             deleted_background: rgba(0xf851491a),
+            deleted_emphasis_background: rgba(0xf8514966),
         }
     }
 
@@ -701,7 +708,7 @@ fn unified_row_element(row: &DiffRow, palette: ThemePalette) -> gpui::AnyElement
             div()
                 .whitespace_nowrap()
                 .text_color(palette.text)
-                .child(row.text.clone()),
+                .child(highlighted_row_text(row, palette)),
         )
         .into_any_element()
 }
@@ -750,8 +757,27 @@ fn split_cell(row: Option<&DiffRow>, before: bool, palette: ThemePalette) -> gpu
             div()
                 .whitespace_nowrap()
                 .text_color(palette.text)
-                .child(row.text.clone()),
+                .child(highlighted_row_text(row, palette)),
         )
+}
+
+fn highlighted_row_text(row: &DiffRow, palette: ThemePalette) -> StyledText {
+    let background = match row.kind {
+        RowKind::Added => palette.created_emphasis_background,
+        RowKind::Deleted => palette.deleted_emphasis_background,
+        RowKind::Context | RowKind::Collapsed => palette.background,
+    };
+    let style = HighlightStyle {
+        background_color: Some(background.into()),
+        ..Default::default()
+    };
+
+    StyledText::new(row.text.clone()).with_highlights(
+        row.word_highlights
+            .iter()
+            .cloned()
+            .map(|range| (range, style)),
+    )
 }
 
 fn row_appearance(
@@ -931,6 +957,7 @@ fn build_file_diff(repository: &Path, path: &str) -> DiffFile {
                 old_line: None,
                 new_line: None,
                 text: "Binary or non-UTF-8 file — no text diff available".into(),
+                word_highlights: vec![],
             }],
             additions: 0,
             deletions: 0,
@@ -974,6 +1001,90 @@ fn jj<const N: usize>(repository: &Path, arguments: [&str; N]) -> Result<String,
     }
 }
 
+fn word_token_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+    fn token_class(character: char) -> u8 {
+        if character.is_whitespace() {
+            0
+        } else if character.is_alphanumeric() || character == '_' {
+            1
+        } else {
+            2
+        }
+    }
+
+    let mut ranges = Vec::new();
+    let mut current: Option<(usize, u8)> = None;
+
+    for (index, character) in text.char_indices() {
+        let class = token_class(character);
+        if class == 2 {
+            if let Some((start, _)) = current.take() {
+                ranges.push(start..index);
+            }
+            ranges.push(index..index + character.len_utf8());
+        } else if let Some((start, current_class)) = current {
+            if class != current_class {
+                ranges.push(start..index);
+                current = Some((index, class));
+            }
+        } else {
+            current = Some((index, class));
+        }
+    }
+    if let Some((start, _)) = current {
+        ranges.push(start..text.len());
+    }
+    ranges
+}
+
+fn token_range_to_byte_range(
+    tokens: &[std::ops::Range<usize>],
+    range: std::ops::Range<u32>,
+) -> Option<std::ops::Range<usize>> {
+    if range.is_empty() {
+        return None;
+    }
+    let start = range.start as usize;
+    let end = range.end as usize;
+    Some(tokens[start].start..tokens[end - 1].end)
+}
+
+fn word_diff_ranges(
+    before: &str,
+    after: &str,
+) -> (
+    Vec<std::ops::Range<usize>>,
+    Vec<std::ops::Range<usize>>,
+) {
+    let before_tokens = word_token_ranges(before);
+    let after_tokens = word_token_ranges(after);
+    let mut input = InternedInput::<String>::default();
+    input.update_before(
+        before_tokens
+            .iter()
+            .map(|range| before[range.clone()].to_owned()),
+    );
+    input.update_after(
+        after_tokens
+            .iter()
+            .map(|range| after[range.clone()].to_owned()),
+    );
+    let diff = Diff::compute(Algorithm::Histogram, &input);
+    let mut before_highlights = Vec::new();
+    let mut after_highlights = Vec::new();
+
+    for hunk in diff.hunks() {
+        if let Some(range) = token_range_to_byte_range(&before_tokens, hunk.before) {
+            before_highlights.push(range);
+        }
+        if let Some(range) = token_range_to_byte_range(&after_tokens, hunk.after) {
+            after_highlights.push(range);
+        }
+    }
+
+    (before_highlights, after_highlights)
+}
+
 fn diff_rows(before: &str, after: &str) -> (Vec<DiffRow>, usize, usize) {
     let before_lines: Vec<&str> = before.split_inclusive('\n').collect();
     let after_lines: Vec<&str> = after.split_inclusive('\n').collect();
@@ -998,23 +1109,39 @@ fn diff_rows(before: &str, after: &str) -> (Vec<DiffRow>, usize, usize) {
             previous_after..after_range.start,
         );
 
+        let deleted_row_start = rows.len();
         for (offset, line) in before_lines[before_range.clone()].iter().enumerate() {
+            let text = display_line(line);
+            let word_highlights = (!text.is_empty()).then_some(0..text.len()).into_iter().collect();
             rows.push(DiffRow {
                 kind: RowKind::Deleted,
                 old_line: Some(before_range.start + offset + 1),
                 new_line: None,
-                text: display_line(line),
+                text,
+                word_highlights,
             });
             deletions += 1;
         }
+        let added_row_start = rows.len();
         for (offset, line) in after_lines[after_range.clone()].iter().enumerate() {
+            let text = display_line(line);
+            let word_highlights = (!text.is_empty()).then_some(0..text.len()).into_iter().collect();
             rows.push(DiffRow {
                 kind: RowKind::Added,
                 old_line: None,
                 new_line: Some(after_range.start + offset + 1),
-                text: display_line(line),
+                text,
+                word_highlights,
             });
             additions += 1;
+        }
+        for offset in 0..before_range.len().min(after_range.len()) {
+            let deleted_row = deleted_row_start + offset;
+            let added_row = added_row_start + offset;
+            let (deleted_highlights, added_highlights) =
+                word_diff_ranges(&rows[deleted_row].text, &rows[added_row].text);
+            rows[deleted_row].word_highlights = deleted_highlights;
+            rows[added_row].word_highlights = added_highlights;
         }
         previous_before = before_range.end;
         previous_after = after_range.end;
@@ -1052,6 +1179,7 @@ fn append_context(
                 old_line: None,
                 new_line: None,
                 text: format!("{} unchanged lines", count - CONTEXT_LINES * 2),
+                word_highlights: vec![],
             });
         }
         rows.push(DiffRow {
@@ -1059,6 +1187,7 @@ fn append_context(
             old_line: Some(before_range.start + offset + 1),
             new_line: Some(after_range.start + offset + 1),
             text: display_line(before[before_range.start + offset]),
+            word_highlights: vec![],
         });
     }
 }
@@ -1158,6 +1287,39 @@ mod tests {
     }
 
     #[test]
+    fn highlights_only_changed_words_on_paired_lines() {
+        let before = "let color = red;";
+        let after = "let color = blue;";
+        let (deleted, added) = word_diff_ranges(before, after);
+
+        assert_eq!(
+            deleted
+                .iter()
+                .map(|range| &before[range.clone()])
+                .collect::<Vec<_>>(),
+            vec!["red"]
+        );
+        assert_eq!(
+            added
+                .iter()
+                .map(|range| &after[range.clone()])
+                .collect::<Vec<_>>(),
+            vec!["blue"]
+        );
+    }
+
+    #[test]
+    fn highlights_the_whole_text_of_an_unpaired_added_line() {
+        let (rows, _, _) = diff_rows("", "entirely new line\n");
+        let added = rows
+            .iter()
+            .find(|row| row.kind == RowKind::Added)
+            .expect("an added row");
+
+        assert_eq!(added.word_highlights, vec![0..added.text.len()]);
+    }
+
+    #[test]
     fn auto_theme_follows_window_appearance() {
         let light = ThemePalette::resolve(ThemePreference::Auto, WindowAppearance::Light);
         let dark = ThemePalette::resolve(ThemePreference::Auto, WindowAppearance::Dark);
@@ -1195,12 +1357,14 @@ mod tests {
                         old_line: Some(1),
                         new_line: None,
                         text: "before".into(),
+                        word_highlights: vec![0..6],
                     },
                     DiffRow {
                         kind: RowKind::Added,
                         old_line: None,
                         new_line: Some(1),
                         text: "after".into(),
+                        word_highlights: vec![0..5],
                     },
                 ],
                 additions: 1,
