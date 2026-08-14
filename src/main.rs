@@ -643,6 +643,7 @@ fn render_diff_list_item(
                 .h(px(DIFF_ROW_HEIGHT))
                 .flex_none()
                 .flex()
+                .w_full()
                 .min_w(px(800.))
                 .font_family("Menlo")
                 .text_sm()
@@ -707,7 +708,11 @@ fn unified_row_element(row: &DiffRow, palette: ThemePalette) -> gpui::AnyElement
 
 fn split_cell(row: Option<&DiffRow>, before: bool, palette: ThemePalette) -> gpui::Div {
     let Some(row) = row else {
-        return div().flex_1().bg(palette.background);
+        return div()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .bg(palette.background);
     };
 
     let (background, marker, marker_color) = row_appearance(row.kind, palette);
@@ -716,6 +721,8 @@ fn split_cell(row: Option<&DiffRow>, before: bool, palette: ThemePalette) -> gpu
 
     div()
         .flex_1()
+        .min_w_0()
+        .overflow_hidden()
         .flex()
         .bg(background)
         .when(!before, |element| {
