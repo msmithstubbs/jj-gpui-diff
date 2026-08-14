@@ -5,13 +5,33 @@ use std::{
 };
 
 use gpui::{
-    actions, div, px, rgb, size, App, Application, Bounds, Context, IntoElement, KeyBinding, Menu,
+    actions, div, px, rgb, rgba, size, App, Application, Bounds, Context, IntoElement, KeyBinding,
+    Menu,
     MenuItem, Render, SharedString, Window, WindowBounds, WindowOptions,
 };
 use gpui::prelude::*;
 use imara_diff::{Algorithm, Diff, InternedInput};
 
 const CONTEXT_LINES: usize = 3;
+
+// GitHub Dark palette from github.com/PyaeSoneAungRgn/github-zed-theme.
+mod github_dark {
+    pub const BACKGROUND: u32 = 0x0d1117;
+    pub const ELEVATED_SURFACE_BACKGROUND: u32 = 0x010409;
+    pub const SUBHEADER_BACKGROUND: u32 = 0x151b23;
+    pub const ELEMENT_BACKGROUND: u32 = 0x212830;
+    pub const ELEMENT_HOVER: u32 = 0x656c7633;
+    pub const BORDER: u32 = 0x3d444d;
+    pub const TEXT: u32 = 0xf0f6fc;
+    pub const MUTED_TEXT: u32 = 0x9198a1;
+    pub const LINE_NUMBER: u32 = 0x9198a1;
+    pub const ACCENT: u32 = 0x4493f8;
+    pub const ACCENT_SELECTED: u32 = 0x1f6feb;
+    pub const CREATED: u32 = 0x3fb950;
+    pub const CREATED_BACKGROUND: u32 = 0x2ea04326;
+    pub const DELETED: u32 = 0xf85149;
+    pub const DELETED_BACKGROUND: u32 = 0xf851491a;
+}
 
 actions!(jj_gpui_diff, [Quit, ToggleDiffView]);
 
@@ -87,10 +107,10 @@ impl Render for DiffViewer {
                 div()
                     .rounded_md()
                     .border_1()
-                    .border_color(rgb(0x5e6a7d))
-                    .bg(rgb(0x202936))
+                    .border_color(rgb(github_dark::BORDER))
+                    .bg(rgb(github_dark::SUBHEADER_BACKGROUND))
                     .p_4()
-                    .text_color(rgb(0xd8e2f0))
+                    .text_color(rgb(github_dark::TEXT))
                     .child(message.clone()),
             );
         } else if self.snapshot.files.is_empty() {
@@ -98,10 +118,10 @@ impl Render for DiffViewer {
                 div()
                     .rounded_md()
                     .border_1()
-                    .border_color(rgb(0x334155))
-                    .bg(rgb(0x151d29))
+                    .border_color(rgb(github_dark::BORDER))
+                    .bg(rgb(github_dark::ELEVATED_SURFACE_BACKGROUND))
                     .p_4()
-                    .text_color(rgb(0x9fb0c5))
+                    .text_color(rgb(github_dark::MUTED_TEXT))
                     .child("The working-copy changeset has no file changes."),
             );
         } else {
@@ -119,8 +139,8 @@ impl Render for DiffViewer {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x0d1117))
-            .text_color(rgb(0xc9d1d9))
+            .bg(rgb(github_dark::BACKGROUND))
+            .text_color(rgb(github_dark::TEXT))
             .on_action(cx.listener(|this, _: &ToggleDiffView, _, cx| this.toggle_view(cx)))
             .child(
                 div()
@@ -131,8 +151,8 @@ impl Render for DiffViewer {
                     .px_4()
                     .py_3()
                     .border_b_1()
-                    .border_color(rgb(0x30363d))
-                    .bg(rgb(0x161b22))
+                    .border_color(rgb(github_dark::BORDER))
+                    .bg(rgb(github_dark::SUBHEADER_BACKGROUND))
                     .child(
                         div()
                             .flex()
@@ -142,7 +162,7 @@ impl Render for DiffViewer {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(rgb(0x8b949e))
+                                    .text_color(rgb(github_dark::MUTED_TEXT))
                                     .child(format!("{}  ·  {}", self.repository.display(), self.snapshot.change)),
                             ),
                     )
@@ -157,12 +177,12 @@ impl Render for DiffViewer {
                                     .cursor_pointer()
                                     .rounded_md()
                                     .border_1()
-                                    .border_color(rgb(0x484f58))
-                                    .bg(rgb(0x21262d))
+                                    .border_color(rgb(github_dark::BORDER))
+                                    .bg(rgb(github_dark::ELEMENT_BACKGROUND))
                                     .px_3()
                                     .py_1()
                                     .text_sm()
-                                    .hover(|style| style.bg(rgb(0x30363d)))
+                                    .hover(|style| style.bg(rgba(github_dark::ELEMENT_HOVER)))
                                     .on_click(cx.listener(|this, _, _, cx| this.toggle_view(cx)))
                                     .child(view_button_label),
                             )
@@ -172,12 +192,12 @@ impl Render for DiffViewer {
                                     .cursor_pointer()
                                     .rounded_md()
                                     .border_1()
-                                    .border_color(rgb(0x3d6a99))
-                                    .bg(rgb(0x1f6feb))
+                                    .border_color(rgb(github_dark::ACCENT))
+                                    .bg(rgb(github_dark::ACCENT_SELECTED))
                                     .px_3()
                                     .py_1()
                                     .text_sm()
-                                    .hover(|style| style.bg(rgb(0x388bfd)))
+                                    .hover(|style| style.bg(rgb(github_dark::ACCENT)))
                                     .on_click(cx.listener(|this, _, _, cx| this.reload(cx)))
                                     .child("Refresh"),
                             ),
@@ -203,8 +223,8 @@ fn file_element(file: &DiffFile, view: DiffView) -> impl IntoElement {
         .rounded_lg()
         .overflow_hidden()
         .border_1()
-        .border_color(rgb(0x30363d))
-        .bg(rgb(0x0d1117))
+        .border_color(rgb(github_dark::BORDER))
+        .bg(rgb(github_dark::BACKGROUND))
         .child(
             div()
                 .flex()
@@ -212,7 +232,7 @@ fn file_element(file: &DiffFile, view: DiffView) -> impl IntoElement {
                 .justify_between()
                 .px_3()
                 .py_2()
-                .bg(rgb(0x161b22))
+                .bg(rgb(github_dark::SUBHEADER_BACKGROUND))
                 .child(div().font_family("Menlo").text_sm().child(file.path.clone()))
                 .child(
                     div()
@@ -220,12 +240,12 @@ fn file_element(file: &DiffFile, view: DiffView) -> impl IntoElement {
                         .text_sm()
                         .child(
                             div()
-                                .text_color(rgb(0x7ee787))
+                                .text_color(rgb(github_dark::CREATED))
                                 .child(format!("+{}", file.additions)),
                         )
                         .child(
                             div()
-                                .text_color(rgb(0xff7b72))
+                                .text_color(rgb(github_dark::DELETED))
                                 .child(format!(" −{}", file.deletions)),
                         ),
                 ),
@@ -240,15 +260,10 @@ fn unified_rows_element(file: &DiffFile) -> gpui::AnyElement {
         .text_sm()
         .overflow_x_scroll()
         .border_t_1()
-        .border_color(rgb(0x30363d));
+        .border_color(rgb(github_dark::BORDER));
 
     for row in &file.rows {
-        let (background, marker, marker_color) = match row.kind {
-            RowKind::Context => (rgb(0x0d1117), " ", rgb(0x8b949e)),
-            RowKind::Added => (rgb(0x163325), "+", rgb(0x7ee787)),
-            RowKind::Deleted => (rgb(0x3b1d22), "−", rgb(0xff7b72)),
-            RowKind::Collapsed => (rgb(0x161b22), "…", rgb(0x8b949e)),
-        };
+        let (background, marker, marker_color) = row_appearance(row.kind);
         let old_number = row.old_line.map_or_else(String::new, |n| n.to_string());
         let new_number = row.new_line.map_or_else(String::new, |n| n.to_string());
         rows = rows.child(
@@ -261,7 +276,7 @@ fn unified_rows_element(file: &DiffFile) -> gpui::AnyElement {
                         .w(px(46.))
                         .pr_2()
                         .text_right()
-                        .text_color(rgb(0x6e7681))
+                        .text_color(rgb(github_dark::LINE_NUMBER))
                         .child(old_number),
                 )
                 .child(
@@ -269,14 +284,14 @@ fn unified_rows_element(file: &DiffFile) -> gpui::AnyElement {
                         .w(px(46.))
                         .pr_2()
                         .text_right()
-                        .text_color(rgb(0x6e7681))
+                        .text_color(rgb(github_dark::LINE_NUMBER))
                         .child(new_number),
                 )
                 .child(div().w(px(20.)).text_color(marker_color).child(marker))
                 .child(
                     div()
                         .whitespace_nowrap()
-                        .text_color(rgb(0xe6edf3))
+                        .text_color(rgb(github_dark::TEXT))
                         .child(row.text.replace('\t', "    ")),
                 ),
         );
@@ -292,7 +307,7 @@ fn split_rows_element(file: &DiffFile) -> gpui::AnyElement {
         .text_sm()
         .overflow_x_scroll()
         .border_t_1()
-        .border_color(rgb(0x30363d));
+        .border_color(rgb(github_dark::BORDER));
 
     for row in split_rows(&file.rows) {
         rows = rows.child(
@@ -309,15 +324,10 @@ fn split_rows_element(file: &DiffFile) -> gpui::AnyElement {
 
 fn split_cell(row: Option<&DiffRow>, before: bool) -> gpui::Div {
     let Some(row) = row else {
-        return div().flex_1().bg(rgb(0x0d1117));
+        return div().flex_1().bg(rgb(github_dark::BACKGROUND));
     };
 
-    let (background, marker, marker_color) = match row.kind {
-        RowKind::Context => (rgb(0x0d1117), " ", rgb(0x8b949e)),
-        RowKind::Added => (rgb(0x163325), "+", rgb(0x7ee787)),
-        RowKind::Deleted => (rgb(0x3b1d22), "−", rgb(0xff7b72)),
-        RowKind::Collapsed => (rgb(0x161b22), "…", rgb(0x8b949e)),
-    };
+    let (background, marker, marker_color) = row_appearance(row.kind);
     let number = if before { row.old_line } else { row.new_line }
         .map_or_else(String::new, |n| n.to_string());
 
@@ -326,7 +336,9 @@ fn split_cell(row: Option<&DiffRow>, before: bool) -> gpui::Div {
         .flex()
         .bg(background)
         .when(!before, |element| {
-            element.border_l_1().border_color(rgb(0x30363d))
+            element
+                .border_l_1()
+                .border_color(rgb(github_dark::BORDER))
         })
         .child(
             div()
@@ -334,7 +346,7 @@ fn split_cell(row: Option<&DiffRow>, before: bool) -> gpui::Div {
                 .flex_none()
                 .pr_2()
                 .text_right()
-                .text_color(rgb(0x6e7681))
+                .text_color(rgb(github_dark::LINE_NUMBER))
                 .child(number),
         )
         .child(
@@ -347,9 +359,34 @@ fn split_cell(row: Option<&DiffRow>, before: bool) -> gpui::Div {
         .child(
             div()
                 .whitespace_nowrap()
-                .text_color(rgb(0xe6edf3))
+                .text_color(rgb(github_dark::TEXT))
                 .child(row.text.replace('\t', "    ")),
         )
+}
+
+fn row_appearance(kind: RowKind) -> (gpui::Rgba, &'static str, gpui::Rgba) {
+    match kind {
+        RowKind::Context => (
+            rgb(github_dark::BACKGROUND),
+            " ",
+            rgb(github_dark::MUTED_TEXT),
+        ),
+        RowKind::Added => (
+            rgba(github_dark::CREATED_BACKGROUND),
+            "+",
+            rgb(github_dark::CREATED),
+        ),
+        RowKind::Deleted => (
+            rgba(github_dark::DELETED_BACKGROUND),
+            "−",
+            rgb(github_dark::DELETED),
+        ),
+        RowKind::Collapsed => (
+            rgb(github_dark::SUBHEADER_BACKGROUND),
+            "…",
+            rgb(github_dark::MUTED_TEXT),
+        ),
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -2,7 +2,7 @@
 
 A small native macOS diff viewer built with Zed's public **GPUI** crate. It reads the Jujutsu working-copy changeset (`@` compared with its parent), then computes each text-file diff locally with `imara-diff`'s `Histogram` algorithm and line post-processing—the same diff engine and processing direction used by Zed.
 
-The display is an inline, scrollable diff: deleted lines are red, added lines are green, and long unchanged spans are collapsed to three lines of context on each side. **Refresh** reruns Jujutsu and recomputes the view.
+The display is a scrollable unified or split diff: deleted lines are red, added lines are green, and long unchanged spans are collapsed to three lines of context on each side. **Refresh** reruns Jujutsu and recomputes the view. The interface uses the [GitHub Dark palette from the GitHub Zed theme](https://github.com/PyaeSoneAungRgn/github-zed-theme).
 
 ## Requirements
 
