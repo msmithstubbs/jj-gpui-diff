@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     env,
     path::{Path, PathBuf},
     process::Command,
@@ -162,19 +163,66 @@ impl ThemePalette {
 struct DiffViewer {
     repository: PathBuf,
     snapshot: Arc<Snapshot>,
+    file_states: Vec<FileViewState>,
     list_items: Arc<Vec<DiffListItem>>,
     widest_item: usize,
     view: DiffView,
     theme: ThemePreference,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileViewState {
+    expanded: bool,
+    accepted: bool,
+}
+
+impl Default for FileViewState {
+    fn default() -> Self {
+        Self {
+            expanded: true,
+            accepted: false,
+        }
+    }
+}
+
+impl FileViewState {
+    fn toggle_expanded(&mut self) {
+        self.expanded = !self.expanded;
+    }
+
+    fn toggle_accepted(&mut self) {
+        self.accepted = !self.accepted;
+        if self.accepted {
+            self.expanded = false;
+        }
+    }
+}
+
 impl DiffViewer {
     fn reload(&mut self, cx: &mut Context<Self>) {
+        let states_by_path: HashMap<_, _> = self
+            .snapshot
+            .files
+            .iter()
+            .zip(self.file_states.iter().copied())
+            .map(|(file, state)| (file.path.clone(), state))
+            .collect();
         self.snapshot = Arc::new(load_snapshot(&self.repository));
-        let (list_items, widest_item) = build_list_items(&self.snapshot, self.view);
+        self.file_states = self
+            .snapshot
+            .files
+            .iter()
+            .map(|file| states_by_path.get(&file.path).copied().unwrap_or_default())
+            .collect();
+        self.rebuild_list();
+        cx.notify();
+    }
+
+    fn rebuild_list(&mut self) {
+        let (list_items, widest_item) =
+            build_list_items(&self.snapshot, self.view, &self.file_states);
         self.list_items = Arc::new(list_items);
         self.widest_item = widest_item;
-        cx.notify();
     }
 
     fn toggle_view(&mut self, cx: &mut Context<Self>) {
@@ -182,9 +230,23 @@ impl DiffViewer {
             DiffView::Unified => DiffView::Split,
             DiffView::Split => DiffView::Unified,
         };
-        let (list_items, widest_item) = build_list_items(&self.snapshot, self.view);
-        self.list_items = Arc::new(list_items);
-        self.widest_item = widest_item;
+        self.rebuild_list();
+        cx.notify();
+    }
+
+    fn toggle_file_expanded(&mut self, file: usize, cx: &mut Context<Self>) {
+        if let Some(state) = self.file_states.get_mut(file) {
+            state.toggle_expanded();
+            self.rebuild_list();
+        }
+        cx.notify();
+    }
+
+    fn toggle_file_accepted(&mut self, file: usize, cx: &mut Context<Self>) {
+        if let Some(state) = self.file_states.get_mut(file) {
+            state.toggle_accepted();
+            self.rebuild_list();
+        }
         cx.notify();
     }
 
@@ -226,19 +288,25 @@ impl Render for DiffViewer {
                 )
                 .into_any_element()
         } else {
-            let snapshot = self.snapshot.clone();
-            let list_items = self.list_items.clone();
             // As in Zed's large scrolling views, only build elements for the visible range.
             uniform_list(
                 "diff-lines",
-                list_items.len(),
-                move |range, _window, _cx| {
+                self.list_items.len(),
+                cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+                    let snapshot = this.snapshot.clone();
+                    let list_items = this.list_items.clone();
                     range
                         .map(|index| {
-                            render_diff_list_item(&snapshot, list_items[index], palette)
+                            render_diff_list_item(
+                                &snapshot,
+                                list_items[index],
+                                &this.file_states,
+                                palette,
+                                cx,
+                            )
                         })
                         .collect::<Vec<_>>()
-                },
+                }),
             )
             .with_width_from_item(Some(self.widest_item))
             .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
@@ -453,11 +521,14 @@ impl Render for DiffViewer {
 fn render_diff_list_item(
     snapshot: &Snapshot,
     item: DiffListItem,
+    file_states: &[FileViewState],
     palette: ThemePalette,
+    cx: &mut Context<DiffViewer>,
 ) -> gpui::AnyElement {
     match item {
         DiffListItem::FileHeader { file } => {
-            let file = &snapshot.files[file];
+            let diff_file = &snapshot.files[file];
+            let state = file_states[file];
             div()
                 .h(px(DIFF_ROW_HEIGHT))
                 .flex_none()
@@ -470,19 +541,89 @@ fn render_diff_list_item(
                 .bg(palette.subheader_background)
                 .font_family("Menlo")
                 .text_sm()
-                .child(file.path.clone())
                 .child(
                     div()
                         .flex()
+                        .flex_1()
+                        .items_center()
+                        .min_w_0()
                         .child(
                             div()
-                                .text_color(palette.created)
-                                .child(format!("+{}", file.additions)),
+                                .id(("file-disclosure", file))
+                                .w(px(24.))
+                                .flex_none()
+                                .cursor_pointer()
+                                .text_color(palette.muted_text)
+                                .hover(|style| style.text_color(palette.text))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.toggle_file_expanded(file, cx)
+                                }))
+                                .child(if state.expanded { "▾" } else { "▸" }),
                         )
                         .child(
                             div()
-                                .text_color(palette.deleted)
-                                .child(format!(" −{}", file.deletions)),
+                                .truncate()
+                                .child(diff_file.path.clone()),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            div()
+                                .flex()
+                                .child(
+                                    div()
+                                        .text_color(palette.created)
+                                        .child(format!("+{}", diff_file.additions)),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(palette.deleted)
+                                        .child(format!(" −{}", diff_file.deletions)),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id(("file-accepted", file))
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .cursor_pointer()
+                                .text_color(if state.accepted {
+                                    palette.created
+                                } else {
+                                    palette.muted_text
+                                })
+                                .hover(|style| style.text_color(palette.text))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.toggle_file_accepted(file, cx)
+                                }))
+                                .child(
+                                    div()
+                                        .w(px(16.))
+                                        .h(px(16.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded_sm()
+                                        .border_1()
+                                        .border_color(if state.accepted {
+                                            palette.created
+                                        } else {
+                                            palette.border
+                                        })
+                                        .bg(if state.accepted {
+                                            palette.created_background
+                                        } else {
+                                            palette.background
+                                        })
+                                        .child(if state.accepted { "✓" } else { "" }),
+                                )
+                                .child("Accepted"),
                         ),
                 )
                 .into_any_element()
@@ -661,26 +802,32 @@ fn split_rows(rows: &[DiffRow]) -> Vec<SplitRow> {
     split
 }
 
-fn build_list_items(snapshot: &Snapshot, view: DiffView) -> (Vec<DiffListItem>, usize) {
+fn build_list_items(
+    snapshot: &Snapshot,
+    view: DiffView,
+    file_states: &[FileViewState],
+) -> (Vec<DiffListItem>, usize) {
     let mut items = Vec::new();
 
     for (file_index, file) in snapshot.files.iter().enumerate() {
         items.push(DiffListItem::FileHeader { file: file_index });
-        match view {
-            DiffView::Unified => {
-                items.extend((0..file.rows.len()).map(|row| DiffListItem::UnifiedRow {
-                    file: file_index,
-                    row,
-                }));
-            }
-            DiffView::Split => {
-                items.extend(split_rows(&file.rows).into_iter().map(|row| {
-                    DiffListItem::SplitRow {
+        if file_states.get(file_index).is_none_or(|state| state.expanded) {
+            match view {
+                DiffView::Unified => {
+                    items.extend((0..file.rows.len()).map(|row| DiffListItem::UnifiedRow {
                         file: file_index,
-                        before: row.before,
-                        after: row.after,
-                    }
-                }));
+                        row,
+                    }));
+                }
+                DiffView::Split => {
+                    items.extend(split_rows(&file.rows).into_iter().map(|row| {
+                        DiffListItem::SplitRow {
+                            file: file_index,
+                            before: row.before,
+                            after: row.after,
+                        }
+                    }));
+                }
             }
         }
         items.push(DiffListItem::FileSeparator);
@@ -697,7 +844,7 @@ fn build_list_items(snapshot: &Snapshot, view: DiffView) -> (Vec<DiffListItem>, 
 
 fn list_item_width_score(snapshot: &Snapshot, item: DiffListItem) -> usize {
     match item {
-        DiffListItem::FileHeader { file } => snapshot.files[file].path.chars().count() + 16,
+        DiffListItem::FileHeader { file } => snapshot.files[file].path.chars().count() + 36,
         DiffListItem::UnifiedRow { file, row } => {
             snapshot.files[file].rows[row].text.chars().count() + 16
         }
@@ -915,8 +1062,9 @@ fn display_line(line: &str) -> String {
 fn main() {
     let repository = env::current_dir().expect("the current directory must be available");
     let initial_snapshot = Arc::new(load_snapshot(&repository));
+    let initial_file_states = vec![FileViewState::default(); initial_snapshot.files.len()];
     let (initial_list_items, widest_item) =
-        build_list_items(&initial_snapshot, DiffView::default());
+        build_list_items(&initial_snapshot, DiffView::default(), &initial_file_states);
     let initial_list_items = Arc::new(initial_list_items);
 
     Application::new().run(move |cx: &mut App| {
@@ -958,6 +1106,7 @@ fn main() {
                     DiffViewer {
                         repository,
                         snapshot: initial_snapshot,
+                        file_states: initial_file_states,
                         list_items: initial_list_items,
                         widest_item,
                         view: DiffView::default(),
@@ -1006,5 +1155,70 @@ mod tests {
 
         assert_eq!(light.background, rgb(0xffffff));
         assert_eq!(dark.background, rgb(0x0d1117));
+    }
+
+    #[test]
+    fn accepting_a_file_collapses_it_but_does_not_lock_disclosure() {
+        let mut state = FileViewState::default();
+
+        state.toggle_accepted();
+        assert!(state.accepted);
+        assert!(!state.expanded);
+
+        state.toggle_expanded();
+        assert!(state.accepted);
+        assert!(state.expanded);
+
+        state.toggle_accepted();
+        assert!(!state.accepted);
+        assert!(state.expanded);
+    }
+
+    #[test]
+    fn collapsed_files_only_contribute_their_header_and_separator() {
+        let snapshot = Snapshot {
+            change: "test".into(),
+            files: vec![DiffFile {
+                path: "src/main.rs".into(),
+                rows: vec![
+                    DiffRow {
+                        kind: RowKind::Deleted,
+                        old_line: Some(1),
+                        new_line: None,
+                        text: "before".into(),
+                    },
+                    DiffRow {
+                        kind: RowKind::Added,
+                        old_line: None,
+                        new_line: Some(1),
+                        text: "after".into(),
+                    },
+                ],
+                additions: 1,
+                deletions: 1,
+            }],
+            message: None,
+        };
+
+        let expanded = build_list_items(
+            &snapshot,
+            DiffView::Unified,
+            &[FileViewState::default()],
+        )
+        .0;
+        let collapsed = build_list_items(
+            &snapshot,
+            DiffView::Unified,
+            &[FileViewState {
+                expanded: false,
+                accepted: false,
+            }],
+        )
+        .0;
+
+        assert_eq!(expanded.len(), 4);
+        assert_eq!(collapsed.len(), 2);
+        assert!(matches!(collapsed[0], DiffListItem::FileHeader { file: 0 }));
+        assert!(matches!(collapsed[1], DiffListItem::FileSeparator));
     }
 }
