@@ -13,7 +13,7 @@ use imara_diff::{Algorithm, Diff, InternedInput};
 
 const CONTEXT_LINES: usize = 3;
 
-actions!(jj_gpui_diff, [Quit]);
+actions!(jj_gpui_diff, [Quit, ToggleDiffView]);
 
 fn quit(_: &Quit, cx: &mut App) {
     cx.quit();
@@ -50,14 +50,30 @@ struct Snapshot {
     message: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DiffView {
+    #[default]
+    Unified,
+    Split,
+}
+
 struct DiffViewer {
     repository: PathBuf,
     snapshot: Snapshot,
+    view: DiffView,
 }
 
 impl DiffViewer {
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.snapshot = load_snapshot(&self.repository);
+        cx.notify();
+    }
+
+    fn toggle_view(&mut self, cx: &mut Context<Self>) {
+        self.view = match self.view {
+            DiffView::Unified => DiffView::Split,
+            DiffView::Split => DiffView::Unified,
+        };
         cx.notify();
     }
 }
@@ -90,9 +106,14 @@ impl Render for DiffViewer {
             );
         } else {
             for file in &self.snapshot.files {
-                file_list = file_list.child(file_element(file));
+                file_list = file_list.child(file_element(file, self.view));
             }
         }
+
+        let view_button_label = match self.view {
+            DiffView::Unified => "Split view",
+            DiffView::Split => "Unified view",
+        };
 
         div()
             .size_full()
@@ -100,6 +121,7 @@ impl Render for DiffViewer {
             .flex_col()
             .bg(rgb(0x0d1117))
             .text_color(rgb(0xc9d1d9))
+            .on_action(cx.listener(|this, _: &ToggleDiffView, _, cx| this.toggle_view(cx)))
             .child(
                 div()
                     .flex_none()
@@ -126,18 +148,39 @@ impl Render for DiffViewer {
                     )
                     .child(
                         div()
-                            .id("refresh")
-                            .cursor_pointer()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(rgb(0x3d6a99))
-                            .bg(rgb(0x1f6feb))
-                            .px_3()
-                            .py_1()
-                            .text_sm()
-                            .hover(|style| style.bg(rgb(0x388bfd)))
-                            .on_click(cx.listener(|this, _, _, cx| this.reload(cx)))
-                            .child("Refresh"),
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id("toggle-diff-view")
+                                    .cursor_pointer()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(rgb(0x484f58))
+                                    .bg(rgb(0x21262d))
+                                    .px_3()
+                                    .py_1()
+                                    .text_sm()
+                                    .hover(|style| style.bg(rgb(0x30363d)))
+                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_view(cx)))
+                                    .child(view_button_label),
+                            )
+                            .child(
+                                div()
+                                    .id("refresh")
+                                    .cursor_pointer()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(rgb(0x3d6a99))
+                                    .bg(rgb(0x1f6feb))
+                                    .px_3()
+                                    .py_1()
+                                    .text_sm()
+                                    .hover(|style| style.bg(rgb(0x388bfd)))
+                                    .on_click(cx.listener(|this, _, _, cx| this.reload(cx)))
+                                    .child("Refresh"),
+                            ),
                     ),
             )
             .child(
@@ -150,7 +193,47 @@ impl Render for DiffViewer {
     }
 }
 
-fn file_element(file: &DiffFile) -> impl IntoElement {
+fn file_element(file: &DiffFile, view: DiffView) -> impl IntoElement {
+    let rows = match view {
+        DiffView::Unified => unified_rows_element(file),
+        DiffView::Split => split_rows_element(file),
+    };
+
+    div()
+        .rounded_lg()
+        .overflow_hidden()
+        .border_1()
+        .border_color(rgb(0x30363d))
+        .bg(rgb(0x0d1117))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .px_3()
+                .py_2()
+                .bg(rgb(0x161b22))
+                .child(div().font_family("Menlo").text_sm().child(file.path.clone()))
+                .child(
+                    div()
+                        .font_family("Menlo")
+                        .text_sm()
+                        .child(
+                            div()
+                                .text_color(rgb(0x7ee787))
+                                .child(format!("+{}", file.additions)),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgb(0xff7b72))
+                                .child(format!(" −{}", file.deletions)),
+                        ),
+                ),
+        )
+        .child(rows)
+}
+
+fn unified_rows_element(file: &DiffFile) -> gpui::AnyElement {
     let mut rows = div()
         .id(SharedString::from(file.path.clone()))
         .font_family("Menlo")
@@ -199,38 +282,122 @@ fn file_element(file: &DiffFile) -> impl IntoElement {
         );
     }
 
-    div()
-        .rounded_lg()
-        .overflow_hidden()
-        .border_1()
-        .border_color(rgb(0x30363d))
-        .bg(rgb(0x0d1117))
-        .child(
+    rows.into_any_element()
+}
+
+fn split_rows_element(file: &DiffFile) -> gpui::AnyElement {
+    let mut rows = div()
+        .id(SharedString::from(format!("{}-split", file.path)))
+        .font_family("Menlo")
+        .text_sm()
+        .overflow_x_scroll()
+        .border_t_1()
+        .border_color(rgb(0x30363d));
+
+    for row in split_rows(&file.rows) {
+        rows = rows.child(
             div()
                 .flex()
-                .items_center()
-                .justify_between()
-                .px_3()
-                .py_2()
-                .bg(rgb(0x161b22))
-                .child(div().font_family("Menlo").text_sm().child(file.path.clone()))
-                .child(
-                    div()
-                        .font_family("Menlo")
-                        .text_sm()
-                        .child(
-                            div()
-                                .text_color(rgb(0x7ee787))
-                                .child(format!("+{}", file.additions)),
-                        )
-                        .child(
-                            div()
-                                .text_color(rgb(0xff7b72))
-                                .child(format!(" −{}", file.deletions)),
-                        ),
-                ),
+                .min_w(px(800.))
+                .child(split_cell(row.before, true))
+                .child(split_cell(row.after, false)),
+        );
+    }
+
+    rows.into_any_element()
+}
+
+fn split_cell(row: Option<&DiffRow>, before: bool) -> gpui::Div {
+    let Some(row) = row else {
+        return div().flex_1().bg(rgb(0x0d1117));
+    };
+
+    let (background, marker, marker_color) = match row.kind {
+        RowKind::Context => (rgb(0x0d1117), " ", rgb(0x8b949e)),
+        RowKind::Added => (rgb(0x163325), "+", rgb(0x7ee787)),
+        RowKind::Deleted => (rgb(0x3b1d22), "−", rgb(0xff7b72)),
+        RowKind::Collapsed => (rgb(0x161b22), "…", rgb(0x8b949e)),
+    };
+    let number = if before { row.old_line } else { row.new_line }
+        .map_or_else(String::new, |n| n.to_string());
+
+    div()
+        .flex_1()
+        .flex()
+        .bg(background)
+        .when(!before, |element| {
+            element.border_l_1().border_color(rgb(0x30363d))
+        })
+        .child(
+            div()
+                .w(px(46.))
+                .flex_none()
+                .pr_2()
+                .text_right()
+                .text_color(rgb(0x6e7681))
+                .child(number),
         )
-        .child(rows)
+        .child(
+            div()
+                .w(px(20.))
+                .flex_none()
+                .text_color(marker_color)
+                .child(marker),
+        )
+        .child(
+            div()
+                .whitespace_nowrap()
+                .text_color(rgb(0xe6edf3))
+                .child(row.text.replace('\t', "    ")),
+        )
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SplitRow<'a> {
+    before: Option<&'a DiffRow>,
+    after: Option<&'a DiffRow>,
+}
+
+fn split_rows(rows: &[DiffRow]) -> Vec<SplitRow<'_>> {
+    let mut split = Vec::new();
+    let mut index = 0;
+
+    while index < rows.len() {
+        match rows[index].kind {
+            RowKind::Context | RowKind::Collapsed => {
+                split.push(SplitRow {
+                    before: Some(&rows[index]),
+                    after: Some(&rows[index]),
+                });
+                index += 1;
+            }
+            RowKind::Added | RowKind::Deleted => {
+                let start = index;
+                while index < rows.len()
+                    && matches!(rows[index].kind, RowKind::Added | RowKind::Deleted)
+                {
+                    index += 1;
+                }
+                let changes = &rows[start..index];
+                let deleted: Vec<_> = changes
+                    .iter()
+                    .filter(|row| row.kind == RowKind::Deleted)
+                    .collect();
+                let added: Vec<_> = changes
+                    .iter()
+                    .filter(|row| row.kind == RowKind::Added)
+                    .collect();
+                for offset in 0..deleted.len().max(added.len()) {
+                    split.push(SplitRow {
+                        before: deleted.get(offset).copied(),
+                        after: added.get(offset).copied(),
+                    });
+                }
+            }
+        }
+    }
+
+    split
 }
 
 fn load_snapshot(repository: &Path) -> Snapshot {
@@ -436,10 +603,17 @@ fn main() {
     Application::new().run(move |cx: &mut App| {
         cx.on_action(quit);
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-        cx.set_menus(vec![Menu {
-            name: "jj-gpui-diff".into(),
-            items: vec![MenuItem::action("Quit jj-gpui-diff", Quit)],
-        }]);
+        cx.bind_keys([KeyBinding::new("cmd-shift-d", ToggleDiffView, None)]);
+        cx.set_menus(vec![
+            Menu {
+                name: "jj-gpui-diff".into(),
+                items: vec![MenuItem::action("Quit jj-gpui-diff", Quit)],
+            },
+            Menu {
+                name: "View".into(),
+                items: vec![MenuItem::action("Toggle Diff View", ToggleDiffView)],
+            },
+        ]);
 
         let bounds = Bounds::centered(None, size(px(1100.), px(760.)), cx);
         cx.open_window(
@@ -451,6 +625,7 @@ fn main() {
                 cx.new(|_| DiffViewer {
                     repository,
                     snapshot: initial_snapshot,
+                    view: DiffView::default(),
                 })
             },
         )
@@ -470,5 +645,20 @@ mod tests {
         assert!(rows.iter().any(|row| row.kind == RowKind::Deleted && row.text == "two"));
         assert!(rows.iter().any(|row| row.kind == RowKind::Added && row.text == "TWO"));
         assert!(rows.iter().any(|row| row.kind == RowKind::Added && row.text == "four"));
+    }
+
+    #[test]
+    fn aligns_changed_lines_in_split_rows() {
+        let (rows, _, _) = diff_rows("one\ntwo\nthree\n", "one\nTWO\nthree\nfour\n");
+        let split = split_rows(&rows);
+
+        assert!(split.iter().any(|row| {
+            row.before.map(|line| line.text.as_str()) == Some("two")
+                && row.after.map(|line| line.text.as_str()) == Some("TWO")
+        }));
+        assert!(split.iter().any(|row| {
+            row.before.is_none()
+                && row.after.map(|line| line.text.as_str()) == Some("four")
+        }));
     }
 }
