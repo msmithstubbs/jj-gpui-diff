@@ -533,9 +533,10 @@ fn render_diff_list_item(
                 .h(px(DIFF_ROW_HEIGHT))
                 .flex_none()
                 .flex()
+                .min_w_full()
                 .items_center()
                 .justify_between()
-                .px_3()
+                .px_6()
                 .border_b_1()
                 .border_color(palette.border)
                 .bg(palette.subheader_background)
@@ -546,11 +547,12 @@ fn render_diff_list_item(
                         .flex()
                         .flex_1()
                         .items_center()
+                        .gap_2()
                         .min_w_0()
                         .child(
                             div()
                                 .id(("file-disclosure", file))
-                                .w(px(24.))
+                                .w(px(20.))
                                 .flex_none()
                                 .cursor_pointer()
                                 .text_color(palette.muted_text)
@@ -572,20 +574,6 @@ fn render_diff_list_item(
                         .flex_none()
                         .items_center()
                         .gap_3()
-                        .child(
-                            div()
-                                .flex()
-                                .child(
-                                    div()
-                                        .text_color(palette.created)
-                                        .child(format!("+{}", diff_file.additions)),
-                                )
-                                .child(
-                                    div()
-                                        .text_color(palette.deleted)
-                                        .child(format!(" −{}", diff_file.deletions)),
-                                ),
-                        )
                         .child(
                             div()
                                 .id(("file-accepted", file))
@@ -624,6 +612,20 @@ fn render_diff_list_item(
                                         .child(if state.accepted { "✓" } else { "" }),
                                 )
                                 .child("Accepted"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .child(
+                                    div()
+                                        .text_color(palette.created)
+                                        .child(format!("+{}", diff_file.additions)),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(palette.deleted)
+                                        .child(format!(" −{}", diff_file.deletions)),
+                                ),
                         ),
                 )
                 .into_any_element()
