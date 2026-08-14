@@ -4,6 +4,8 @@ A small native macOS diff viewer built with Zed's public **GPUI** crate. It read
 
 The display is a scrollable unified or split diff: deleted lines are red, added lines are green, and long unchanged spans are collapsed to three lines of context on each side. **Refresh** reruns Jujutsu and recomputes the view. The interface uses the [GitHub Light and Dark palettes from the GitHub Zed theme](https://github.com/PyaeSoneAungRgn/github-zed-theme), with Auto following the macOS appearance setting.
 
+GPUI renders the window through Metal on macOS. Diff lines use GPUI's virtualized uniform list, so layout and painting are limited to the visible rows plus a small overdraw area. Use a `--release` build when evaluating scrolling performance; debug builds are substantially slower.
+
 ## Requirements
 
 - macOS with Xcode and the Metal toolchain

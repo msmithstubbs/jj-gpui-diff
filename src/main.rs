@@ -2,16 +2,19 @@ use std::{
     env,
     path::{Path, PathBuf},
     process::Command,
+    sync::Arc,
 };
 
 use gpui::{
-    actions, div, px, rgb, rgba, size, App, Application, Bounds, Context, IntoElement, KeyBinding,
-    Menu, MenuItem, Render, SharedString, Window, WindowAppearance, WindowBounds, WindowOptions,
+    actions, div, px, rgb, rgba, size, uniform_list, App, Application, Bounds, Context,
+    IntoElement, KeyBinding, ListHorizontalSizingBehavior, Menu, MenuItem, Render, Window,
+    WindowAppearance, WindowBounds, WindowOptions,
 };
 use gpui::prelude::*;
 use imara_diff::{Algorithm, Diff, InternedInput};
 
 const CONTEXT_LINES: usize = 3;
+const DIFF_ROW_HEIGHT: f32 = 22.;
 
 actions!(
     jj_gpui_diff,
@@ -58,6 +61,18 @@ enum DiffView {
     #[default]
     Unified,
     Split,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum DiffListItem {
+    FileHeader { file: usize },
+    UnifiedRow { file: usize, row: usize },
+    SplitRow {
+        file: usize,
+        before: Option<usize>,
+        after: Option<usize>,
+    },
+    FileSeparator,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -146,14 +161,19 @@ impl ThemePalette {
 
 struct DiffViewer {
     repository: PathBuf,
-    snapshot: Snapshot,
+    snapshot: Arc<Snapshot>,
+    list_items: Arc<Vec<DiffListItem>>,
+    widest_item: usize,
     view: DiffView,
     theme: ThemePreference,
 }
 
 impl DiffViewer {
     fn reload(&mut self, cx: &mut Context<Self>) {
-        self.snapshot = load_snapshot(&self.repository);
+        self.snapshot = Arc::new(load_snapshot(&self.repository));
+        let (list_items, widest_item) = build_list_items(&self.snapshot, self.view);
+        self.list_items = Arc::new(list_items);
+        self.widest_item = widest_item;
         cx.notify();
     }
 
@@ -162,6 +182,9 @@ impl DiffViewer {
             DiffView::Unified => DiffView::Split,
             DiffView::Split => DiffView::Unified,
         };
+        let (list_items, widest_item) = build_list_items(&self.snapshot, self.view);
+        self.list_items = Arc::new(list_items);
+        self.widest_item = widest_item;
         cx.notify();
     }
 
@@ -174,10 +197,10 @@ impl DiffViewer {
 impl Render for DiffViewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = ThemePalette::resolve(self.theme, window.appearance());
-        let mut file_list = div().flex().flex_col().gap_4().p_4();
-
-        if let Some(message) = &self.snapshot.message {
-            file_list = file_list.child(
+        let diff_content = if let Some(message) = &self.snapshot.message {
+            div()
+                .p_4()
+                .child(
                 div()
                     .rounded_md()
                     .border_1()
@@ -186,9 +209,12 @@ impl Render for DiffViewer {
                     .p_4()
                     .text_color(palette.text)
                     .child(message.clone()),
-            );
+                )
+                .into_any_element()
         } else if self.snapshot.files.is_empty() {
-            file_list = file_list.child(
+            div()
+                .p_4()
+                .child(
                 div()
                     .rounded_md()
                     .border_1()
@@ -197,12 +223,29 @@ impl Render for DiffViewer {
                     .p_4()
                     .text_color(palette.muted_text)
                     .child("The working-copy changeset has no file changes."),
-            );
+                )
+                .into_any_element()
         } else {
-            for file in &self.snapshot.files {
-                file_list = file_list.child(file_element(file, self.view, palette));
-            }
-        }
+            let snapshot = self.snapshot.clone();
+            let list_items = self.list_items.clone();
+            // As in Zed's large scrolling views, only build elements for the visible range.
+            uniform_list(
+                "diff-lines",
+                list_items.len(),
+                move |range, _window, _cx| {
+                    range
+                        .map(|index| {
+                            render_diff_list_item(&snapshot, list_items[index], palette)
+                        })
+                        .collect::<Vec<_>>()
+                },
+            )
+            .with_width_from_item(Some(self.widest_item))
+            .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
+            .size_full()
+            .px_4()
+            .into_any_element()
+        };
 
         let view_button_label = match self.view {
             DiffView::Unified => "Split view",
@@ -400,39 +443,37 @@ impl Render for DiffViewer {
             )
             .child(
                 div()
-                    .id("diff-scroll")
                     .flex_1()
-                    .overflow_y_scroll()
-                    .child(file_list),
+                    .overflow_hidden()
+                    .child(diff_content),
             )
     }
 }
 
-fn file_element(file: &DiffFile, view: DiffView, palette: ThemePalette) -> impl IntoElement {
-    let rows = match view {
-        DiffView::Unified => unified_rows_element(file, palette),
-        DiffView::Split => split_rows_element(file, palette),
-    };
-
-    div()
-        .rounded_lg()
-        .overflow_hidden()
-        .border_1()
-        .border_color(palette.border)
-        .bg(palette.background)
-        .child(
+fn render_diff_list_item(
+    snapshot: &Snapshot,
+    item: DiffListItem,
+    palette: ThemePalette,
+) -> gpui::AnyElement {
+    match item {
+        DiffListItem::FileHeader { file } => {
+            let file = &snapshot.files[file];
             div()
+                .h(px(DIFF_ROW_HEIGHT))
+                .flex_none()
                 .flex()
                 .items_center()
                 .justify_between()
                 .px_3()
-                .py_2()
+                .border_b_1()
+                .border_color(palette.border)
                 .bg(palette.subheader_background)
-                .child(div().font_family("Menlo").text_sm().child(file.path.clone()))
+                .font_family("Menlo")
+                .text_sm()
+                .child(file.path.clone())
                 .child(
                     div()
-                        .font_family("Menlo")
-                        .text_sm()
+                        .flex()
                         .child(
                             div()
                                 .text_color(palette.created)
@@ -443,78 +484,82 @@ fn file_element(file: &DiffFile, view: DiffView, palette: ThemePalette) -> impl 
                                 .text_color(palette.deleted)
                                 .child(format!(" −{}", file.deletions)),
                         ),
-                ),
-        )
-        .child(rows)
-}
-
-fn unified_rows_element(file: &DiffFile, palette: ThemePalette) -> gpui::AnyElement {
-    let mut rows = div()
-        .id(SharedString::from(file.path.clone()))
-        .font_family("Menlo")
-        .text_sm()
-        .overflow_x_scroll()
-        .border_t_1()
-        .border_color(palette.border);
-
-    for row in &file.rows {
-        let (background, marker, marker_color) = row_appearance(row.kind, palette);
-        let old_number = row.old_line.map_or_else(String::new, |n| n.to_string());
-        let new_number = row.new_line.map_or_else(String::new, |n| n.to_string());
-        rows = rows.child(
-            div()
-                .flex()
-                .min_w_full()
-                .bg(background)
-                .child(
-                    div()
-                        .w(px(46.))
-                        .pr_2()
-                        .text_right()
-                        .text_color(palette.line_number)
-                        .child(old_number),
                 )
-                .child(
-                    div()
-                        .w(px(46.))
-                        .pr_2()
-                        .text_right()
-                        .text_color(palette.line_number)
-                        .child(new_number),
-                )
-                .child(div().w(px(20.)).text_color(marker_color).child(marker))
-                .child(
-                    div()
-                        .whitespace_nowrap()
-                        .text_color(palette.text)
-                        .child(row.text.replace('\t', "    ")),
-                ),
-        );
-    }
-
-    rows.into_any_element()
-}
-
-fn split_rows_element(file: &DiffFile, palette: ThemePalette) -> gpui::AnyElement {
-    let mut rows = div()
-        .id(SharedString::from(format!("{}-split", file.path)))
-        .font_family("Menlo")
-        .text_sm()
-        .overflow_x_scroll()
-        .border_t_1()
-        .border_color(palette.border);
-
-    for row in split_rows(&file.rows) {
-        rows = rows.child(
+                .into_any_element()
+        }
+        DiffListItem::UnifiedRow { file, row } => {
+            unified_row_element(&snapshot.files[file].rows[row], palette)
+        }
+        DiffListItem::SplitRow {
+            file,
+            before,
+            after,
+        } => {
+            let rows = &snapshot.files[file].rows;
             div()
+                .h(px(DIFF_ROW_HEIGHT))
+                .flex_none()
                 .flex()
                 .min_w(px(800.))
-                .child(split_cell(row.before, true, palette))
-                .child(split_cell(row.after, false, palette)),
-        );
+                .font_family("Menlo")
+                .text_sm()
+                .child(split_cell(before.map(|row| &rows[row]), true, palette))
+                .child(split_cell(after.map(|row| &rows[row]), false, palette))
+                .into_any_element()
+        }
+        DiffListItem::FileSeparator => div()
+            .h(px(DIFF_ROW_HEIGHT))
+            .flex_none()
+            .bg(palette.background)
+            .into_any_element(),
     }
+}
 
-    rows.into_any_element()
+fn unified_row_element(row: &DiffRow, palette: ThemePalette) -> gpui::AnyElement {
+    let (background, marker, marker_color) = row_appearance(row.kind, palette);
+    let old_number = row.old_line.map_or_else(String::new, |n| n.to_string());
+    let new_number = row.new_line.map_or_else(String::new, |n| n.to_string());
+
+    div()
+        .h(px(DIFF_ROW_HEIGHT))
+        .flex_none()
+        .flex()
+        .min_w_full()
+        .bg(background)
+        .font_family("Menlo")
+        .text_sm()
+        .child(
+            div()
+                .w(px(46.))
+                .flex_none()
+                .pr_2()
+                .text_right()
+                .text_color(palette.line_number)
+                .child(old_number),
+        )
+        .child(
+            div()
+                .w(px(46.))
+                .flex_none()
+                .pr_2()
+                .text_right()
+                .text_color(palette.line_number)
+                .child(new_number),
+        )
+        .child(
+            div()
+                .w(px(20.))
+                .flex_none()
+                .text_color(marker_color)
+                .child(marker),
+        )
+        .child(
+            div()
+                .whitespace_nowrap()
+                .text_color(palette.text)
+                .child(row.text.clone()),
+        )
+        .into_any_element()
 }
 
 fn split_cell(row: Option<&DiffRow>, before: bool, palette: ThemePalette) -> gpui::Div {
@@ -555,7 +600,7 @@ fn split_cell(row: Option<&DiffRow>, before: bool, palette: ThemePalette) -> gpu
             div()
                 .whitespace_nowrap()
                 .text_color(palette.text)
-                .child(row.text.replace('\t', "    ")),
+                .child(row.text.clone()),
         )
 }
 
@@ -572,12 +617,12 @@ fn row_appearance(
 }
 
 #[derive(Clone, Copy, Debug)]
-struct SplitRow<'a> {
-    before: Option<&'a DiffRow>,
-    after: Option<&'a DiffRow>,
+struct SplitRow {
+    before: Option<usize>,
+    after: Option<usize>,
 }
 
-fn split_rows(rows: &[DiffRow]) -> Vec<SplitRow<'_>> {
+fn split_rows(rows: &[DiffRow]) -> Vec<SplitRow> {
     let mut split = Vec::new();
     let mut index = 0;
 
@@ -585,8 +630,8 @@ fn split_rows(rows: &[DiffRow]) -> Vec<SplitRow<'_>> {
         match rows[index].kind {
             RowKind::Context | RowKind::Collapsed => {
                 split.push(SplitRow {
-                    before: Some(&rows[index]),
-                    after: Some(&rows[index]),
+                    before: Some(index),
+                    after: Some(index),
                 });
                 index += 1;
             }
@@ -597,14 +642,11 @@ fn split_rows(rows: &[DiffRow]) -> Vec<SplitRow<'_>> {
                 {
                     index += 1;
                 }
-                let changes = &rows[start..index];
-                let deleted: Vec<_> = changes
-                    .iter()
-                    .filter(|row| row.kind == RowKind::Deleted)
+                let deleted: Vec<_> = (start..index)
+                    .filter(|row| rows[*row].kind == RowKind::Deleted)
                     .collect();
-                let added: Vec<_> = changes
-                    .iter()
-                    .filter(|row| row.kind == RowKind::Added)
+                let added: Vec<_> = (start..index)
+                    .filter(|row| rows[*row].kind == RowKind::Added)
                     .collect();
                 for offset in 0..deleted.len().max(added.len()) {
                     split.push(SplitRow {
@@ -617,6 +659,60 @@ fn split_rows(rows: &[DiffRow]) -> Vec<SplitRow<'_>> {
     }
 
     split
+}
+
+fn build_list_items(snapshot: &Snapshot, view: DiffView) -> (Vec<DiffListItem>, usize) {
+    let mut items = Vec::new();
+
+    for (file_index, file) in snapshot.files.iter().enumerate() {
+        items.push(DiffListItem::FileHeader { file: file_index });
+        match view {
+            DiffView::Unified => {
+                items.extend((0..file.rows.len()).map(|row| DiffListItem::UnifiedRow {
+                    file: file_index,
+                    row,
+                }));
+            }
+            DiffView::Split => {
+                items.extend(split_rows(&file.rows).into_iter().map(|row| {
+                    DiffListItem::SplitRow {
+                        file: file_index,
+                        before: row.before,
+                        after: row.after,
+                    }
+                }));
+            }
+        }
+        items.push(DiffListItem::FileSeparator);
+    }
+
+    let widest_item = items
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, item)| list_item_width_score(snapshot, **item))
+        .map_or(0, |(index, _)| index);
+
+    (items, widest_item)
+}
+
+fn list_item_width_score(snapshot: &Snapshot, item: DiffListItem) -> usize {
+    match item {
+        DiffListItem::FileHeader { file } => snapshot.files[file].path.chars().count() + 16,
+        DiffListItem::UnifiedRow { file, row } => {
+            snapshot.files[file].rows[row].text.chars().count() + 16
+        }
+        DiffListItem::SplitRow {
+            file,
+            before,
+            after,
+        } => {
+            let rows = &snapshot.files[file].rows;
+            before.map_or(0, |row| rows[row].text.chars().count())
+                + after.map_or(0, |row| rows[row].text.chars().count())
+                + 20
+        }
+        DiffListItem::FileSeparator => 0,
+    }
 }
 
 fn load_snapshot(repository: &Path) -> Snapshot {
@@ -812,12 +908,16 @@ fn append_context(
 }
 
 fn display_line(line: &str) -> String {
-    line.trim_end_matches(&['\r', '\n'][..]).to_owned()
+    line.trim_end_matches(&['\r', '\n'][..])
+        .replace('\t', "    ")
 }
 
 fn main() {
     let repository = env::current_dir().expect("the current directory must be available");
-    let initial_snapshot = load_snapshot(&repository);
+    let initial_snapshot = Arc::new(load_snapshot(&repository));
+    let (initial_list_items, widest_item) =
+        build_list_items(&initial_snapshot, DiffView::default());
+    let initial_list_items = Arc::new(initial_list_items);
 
     Application::new().run(move |cx: &mut App| {
         cx.on_action(quit);
@@ -858,6 +958,8 @@ fn main() {
                     DiffViewer {
                         repository,
                         snapshot: initial_snapshot,
+                        list_items: initial_list_items,
+                        widest_item,
                         view: DiffView::default(),
                         theme: ThemePreference::default(),
                     }
@@ -888,12 +990,12 @@ mod tests {
         let split = split_rows(&rows);
 
         assert!(split.iter().any(|row| {
-            row.before.map(|line| line.text.as_str()) == Some("two")
-                && row.after.map(|line| line.text.as_str()) == Some("TWO")
+            row.before.map(|line| rows[line].text.as_str()) == Some("two")
+                && row.after.map(|line| rows[line].text.as_str()) == Some("TWO")
         }));
         assert!(split.iter().any(|row| {
             row.before.is_none()
-                && row.after.map(|line| line.text.as_str()) == Some("four")
+                && row.after.map(|line| rows[line].text.as_str()) == Some("four")
         }));
     }
 
