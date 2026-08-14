@@ -1,0 +1,461 @@
+use std::{
+    env,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+use gpui::{
+    div, px, rgb, size, App, Application, Bounds, Context, IntoElement, Render, Window,
+    WindowBounds, WindowOptions, SharedString,
+};
+use gpui::prelude::*;
+use imara_diff::{Algorithm, Diff, InternedInput};
+
+const CONTEXT_LINES: usize = 3;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RowKind {
+    Context,
+    Added,
+    Deleted,
+    Collapsed,
+}
+
+#[derive(Clone, Debug)]
+struct DiffRow {
+    kind: RowKind,
+    old_line: Option<usize>,
+    new_line: Option<usize>,
+    text: String,
+}
+
+#[derive(Debug)]
+struct DiffFile {
+    path: String,
+    rows: Vec<DiffRow>,
+    additions: usize,
+    deletions: usize,
+}
+
+#[derive(Debug)]
+struct Snapshot {
+    change: String,
+    files: Vec<DiffFile>,
+    message: Option<String>,
+}
+
+struct DiffViewer {
+    repository: PathBuf,
+    snapshot: Snapshot,
+}
+
+impl DiffViewer {
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        self.snapshot = load_snapshot(&self.repository);
+        cx.notify();
+    }
+}
+
+impl Render for DiffViewer {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut file_list = div().flex().flex_col().gap_4().p_4();
+
+        if let Some(message) = &self.snapshot.message {
+            file_list = file_list.child(
+                div()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(0x5e6a7d))
+                    .bg(rgb(0x202936))
+                    .p_4()
+                    .text_color(rgb(0xd8e2f0))
+                    .child(message.clone()),
+            );
+        } else if self.snapshot.files.is_empty() {
+            file_list = file_list.child(
+                div()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(0x334155))
+                    .bg(rgb(0x151d29))
+                    .p_4()
+                    .text_color(rgb(0x9fb0c5))
+                    .child("The working-copy changeset has no file changes."),
+            );
+        } else {
+            for file in &self.snapshot.files {
+                file_list = file_list.child(file_element(file));
+            }
+        }
+
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(0x0d1117))
+            .text_color(rgb(0xc9d1d9))
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px_4()
+                    .py_3()
+                    .border_b_1()
+                    .border_color(rgb(0x30363d))
+                    .bg(rgb(0x161b22))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_lg().child("Jujutsu changeset diff"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(0x8b949e))
+                                    .child(format!("{}  ·  {}", self.repository.display(), self.snapshot.change)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("refresh")
+                            .cursor_pointer()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(0x3d6a99))
+                            .bg(rgb(0x1f6feb))
+                            .px_3()
+                            .py_1()
+                            .text_sm()
+                            .hover(|style| style.bg(rgb(0x388bfd)))
+                            .on_click(cx.listener(|this, _, _, cx| this.reload(cx)))
+                            .child("Refresh"),
+                    ),
+            )
+            .child(
+                div()
+                    .id("diff-scroll")
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .child(file_list),
+            )
+    }
+}
+
+fn file_element(file: &DiffFile) -> impl IntoElement {
+    let mut rows = div()
+        .id(SharedString::from(file.path.clone()))
+        .font_family("Menlo")
+        .text_sm()
+        .overflow_x_scroll()
+        .border_t_1()
+        .border_color(rgb(0x30363d));
+
+    for row in &file.rows {
+        let (background, marker, marker_color) = match row.kind {
+            RowKind::Context => (rgb(0x0d1117), " ", rgb(0x8b949e)),
+            RowKind::Added => (rgb(0x163325), "+", rgb(0x7ee787)),
+            RowKind::Deleted => (rgb(0x3b1d22), "−", rgb(0xff7b72)),
+            RowKind::Collapsed => (rgb(0x161b22), "…", rgb(0x8b949e)),
+        };
+        let old_number = row.old_line.map_or_else(String::new, |n| n.to_string());
+        let new_number = row.new_line.map_or_else(String::new, |n| n.to_string());
+        rows = rows.child(
+            div()
+                .flex()
+                .min_w_full()
+                .bg(background)
+                .child(
+                    div()
+                        .w(px(46.))
+                        .pr_2()
+                        .text_right()
+                        .text_color(rgb(0x6e7681))
+                        .child(old_number),
+                )
+                .child(
+                    div()
+                        .w(px(46.))
+                        .pr_2()
+                        .text_right()
+                        .text_color(rgb(0x6e7681))
+                        .child(new_number),
+                )
+                .child(div().w(px(20.)).text_color(marker_color).child(marker))
+                .child(
+                    div()
+                        .whitespace_nowrap()
+                        .text_color(rgb(0xe6edf3))
+                        .child(row.text.replace('\t', "    ")),
+                ),
+        );
+    }
+
+    div()
+        .rounded_lg()
+        .overflow_hidden()
+        .border_1()
+        .border_color(rgb(0x30363d))
+        .bg(rgb(0x0d1117))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .px_3()
+                .py_2()
+                .bg(rgb(0x161b22))
+                .child(div().font_family("Menlo").text_sm().child(file.path.clone()))
+                .child(
+                    div()
+                        .font_family("Menlo")
+                        .text_sm()
+                        .child(
+                            div()
+                                .text_color(rgb(0x7ee787))
+                                .child(format!("+{}", file.additions)),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgb(0xff7b72))
+                                .child(format!(" −{}", file.deletions)),
+                        ),
+                ),
+        )
+        .child(rows)
+}
+
+fn load_snapshot(repository: &Path) -> Snapshot {
+    let root = match jj(repository, ["root"]) {
+        Ok(root) => root,
+        Err(error) => {
+            return Snapshot {
+                change: "no Jujutsu repository".into(),
+                files: vec![],
+                message: Some(format!(
+                    "Could not open a Jujutsu repository from {}.\n\n{}",
+                    repository.display(),
+                    error
+                )),
+            };
+        }
+    };
+    let root = PathBuf::from(root.trim());
+
+    let change = jj(&root, ["log", "-r", "@", "-T", "change_id.short() ++ \"  \" ++ description.first_line()"])
+        .unwrap_or_else(|_| "@".into())
+        .trim()
+        .to_owned();
+
+    let paths = match jj(&root, ["diff", "-r", "@", "--name-only"]) {
+        Ok(paths) => paths,
+        Err(error) => {
+            return Snapshot {
+                change,
+                files: vec![],
+                message: Some(error),
+            };
+        }
+    };
+
+    let files = paths
+        .lines()
+        .filter(|path| !path.is_empty())
+        .map(|path| build_file_diff(&root, path))
+        .collect();
+
+    Snapshot {
+        change,
+        files,
+        message: None,
+    }
+}
+
+fn build_file_diff(repository: &Path, path: &str) -> DiffFile {
+    // A missing file on one side is an addition/deletion, so it is intentionally empty.
+    let before = jj_file(repository, "@-", path);
+    let after = jj_file(repository, "@", path);
+    if matches!(&before, Err(error) if error == "Binary files are not displayed.")
+        || matches!(&after, Err(error) if error == "Binary files are not displayed.")
+    {
+        return DiffFile {
+            path: path.into(),
+            rows: vec![DiffRow {
+                kind: RowKind::Collapsed,
+                old_line: None,
+                new_line: None,
+                text: "Binary or non-UTF-8 file — no text diff available".into(),
+            }],
+            additions: 0,
+            deletions: 0,
+        };
+    }
+
+    let (rows, additions, deletions) = diff_rows(
+        &before.unwrap_or_default(),
+        &after.unwrap_or_default(),
+    );
+    DiffFile {
+        path: path.into(),
+        rows,
+        additions,
+        deletions,
+    }
+}
+
+fn jj_file(repository: &Path, revision: &str, path: &str) -> Result<String, String> {
+    let output = Command::new("jj")
+        .current_dir(repository)
+        .args(["file", "show", "-r", revision, "--", path])
+        .output()
+        .map_err(|error| format!("Unable to run jj: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    String::from_utf8(output.stdout).map_err(|_| "Binary files are not displayed.".into())
+}
+
+fn jj<const N: usize>(repository: &Path, arguments: [&str; N]) -> Result<String, String> {
+    let output = Command::new("jj")
+        .current_dir(repository)
+        .args(arguments)
+        .output()
+        .map_err(|error| format!("Unable to run jj: {error}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
+    }
+}
+
+fn diff_rows(before: &str, after: &str) -> (Vec<DiffRow>, usize, usize) {
+    let before_lines: Vec<&str> = before.split_inclusive('\n').collect();
+    let after_lines: Vec<&str> = after.split_inclusive('\n').collect();
+    let input = InternedInput::new(before, after);
+    let mut diff = Diff::compute(Algorithm::Histogram, &input);
+    // This is the same line-oriented post-processing Zed applies after imara-diff.
+    diff.postprocess_lines(&input);
+
+    let mut rows = Vec::new();
+    let mut previous_before = 0usize;
+    let mut previous_after = 0usize;
+    let mut additions = 0usize;
+    let mut deletions = 0usize;
+
+    for hunk in diff.hunks() {
+        let before_range = hunk.before.start as usize..hunk.before.end as usize;
+        let after_range = hunk.after.start as usize..hunk.after.end as usize;
+        append_context(
+            &mut rows,
+            &before_lines,
+            previous_before..before_range.start,
+            previous_after..after_range.start,
+        );
+
+        for (offset, line) in before_lines[before_range.clone()].iter().enumerate() {
+            rows.push(DiffRow {
+                kind: RowKind::Deleted,
+                old_line: Some(before_range.start + offset + 1),
+                new_line: None,
+                text: display_line(line),
+            });
+            deletions += 1;
+        }
+        for (offset, line) in after_lines[after_range.clone()].iter().enumerate() {
+            rows.push(DiffRow {
+                kind: RowKind::Added,
+                old_line: None,
+                new_line: Some(after_range.start + offset + 1),
+                text: display_line(line),
+            });
+            additions += 1;
+        }
+        previous_before = before_range.end;
+        previous_after = after_range.end;
+    }
+
+    append_context(
+        &mut rows,
+        &before_lines,
+        previous_before..before_lines.len(),
+        previous_after..after_lines.len(),
+    );
+    (rows, additions, deletions)
+}
+
+fn append_context(
+    rows: &mut Vec<DiffRow>,
+    before: &[&str],
+    before_range: std::ops::Range<usize>,
+    after_range: std::ops::Range<usize>,
+) {
+    let count = before_range.len();
+    let keep_all = count <= CONTEXT_LINES * 2;
+    let mut indices: Vec<usize> = if keep_all {
+        (0..count).collect()
+    } else {
+        (0..CONTEXT_LINES)
+            .chain((count - CONTEXT_LINES)..count)
+            .collect()
+    };
+
+    for (position, offset) in indices.drain(..).enumerate() {
+        if !keep_all && position == CONTEXT_LINES {
+            rows.push(DiffRow {
+                kind: RowKind::Collapsed,
+                old_line: None,
+                new_line: None,
+                text: format!("{} unchanged lines", count - CONTEXT_LINES * 2),
+            });
+        }
+        rows.push(DiffRow {
+            kind: RowKind::Context,
+            old_line: Some(before_range.start + offset + 1),
+            new_line: Some(after_range.start + offset + 1),
+            text: display_line(before[before_range.start + offset]),
+        });
+    }
+}
+
+fn display_line(line: &str) -> String {
+    line.trim_end_matches(&['\r', '\n'][..]).to_owned()
+}
+
+fn main() {
+    let repository = env::current_dir().expect("the current directory must be available");
+    let initial_snapshot = load_snapshot(&repository);
+
+    Application::new().run(move |cx: &mut App| {
+        let bounds = Bounds::centered(None, size(px(1100.), px(760.)), cx);
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                ..Default::default()
+            },
+            |_, cx| {
+                cx.new(|_| DiffViewer {
+                    repository,
+                    snapshot: initial_snapshot,
+                })
+            },
+        )
+        .expect("could not open macOS window");
+        cx.activate(true);
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn produces_colored_rows_from_imara_hunks() {
+        let (rows, additions, deletions) = diff_rows("one\ntwo\nthree\n", "one\nTWO\nthree\nfour\n");
+        assert_eq!((additions, deletions), (2, 1));
+        assert!(rows.iter().any(|row| row.kind == RowKind::Deleted && row.text == "two"));
+        assert!(rows.iter().any(|row| row.kind == RowKind::Added && row.text == "TWO"));
+        assert!(rows.iter().any(|row| row.kind == RowKind::Added && row.text == "four"));
+    }
+}

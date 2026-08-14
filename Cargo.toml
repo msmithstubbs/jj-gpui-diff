@@ -1,0 +1,9 @@
+[package]
+name = "jj-gpui-diff"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+
+[dependencies]
+gpui = { version = "0.2.2", default-features = false, features = ["font-kit"] }
+imara-diff = "0.2.0"
