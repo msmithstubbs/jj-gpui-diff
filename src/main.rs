@@ -5,13 +5,19 @@ use std::{
 };
 
 use gpui::{
-    div, px, rgb, size, App, Application, Bounds, Context, IntoElement, Render, Window,
-    WindowBounds, WindowOptions, SharedString,
+    actions, div, px, rgb, size, App, Application, Bounds, Context, IntoElement, KeyBinding, Menu,
+    MenuItem, Render, SharedString, Window, WindowBounds, WindowOptions,
 };
 use gpui::prelude::*;
 use imara_diff::{Algorithm, Diff, InternedInput};
 
 const CONTEXT_LINES: usize = 3;
+
+actions!(jj_gpui_diff, [Quit]);
+
+fn quit(_: &Quit, cx: &mut App) {
+    cx.quit();
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RowKind {
@@ -428,6 +434,13 @@ fn main() {
     let initial_snapshot = load_snapshot(&repository);
 
     Application::new().run(move |cx: &mut App| {
+        cx.on_action(quit);
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.set_menus(vec![Menu {
+            name: "jj-gpui-diff".into(),
+            items: vec![MenuItem::action("Quit jj-gpui-diff", Quit)],
+        }]);
+
         let bounds = Bounds::centered(None, size(px(1100.), px(760.)), cx);
         cx.open_window(
             WindowOptions {
