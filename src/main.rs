@@ -6,34 +6,17 @@ use std::{
 
 use gpui::{
     actions, div, px, rgb, rgba, size, App, Application, Bounds, Context, IntoElement, KeyBinding,
-    Menu,
-    MenuItem, Render, SharedString, Window, WindowBounds, WindowOptions,
+    Menu, MenuItem, Render, SharedString, Window, WindowAppearance, WindowBounds, WindowOptions,
 };
 use gpui::prelude::*;
 use imara_diff::{Algorithm, Diff, InternedInput};
 
 const CONTEXT_LINES: usize = 3;
 
-// GitHub Dark palette from github.com/PyaeSoneAungRgn/github-zed-theme.
-mod github_dark {
-    pub const BACKGROUND: u32 = 0x0d1117;
-    pub const ELEVATED_SURFACE_BACKGROUND: u32 = 0x010409;
-    pub const SUBHEADER_BACKGROUND: u32 = 0x151b23;
-    pub const ELEMENT_BACKGROUND: u32 = 0x212830;
-    pub const ELEMENT_HOVER: u32 = 0x656c7633;
-    pub const BORDER: u32 = 0x3d444d;
-    pub const TEXT: u32 = 0xf0f6fc;
-    pub const MUTED_TEXT: u32 = 0x9198a1;
-    pub const LINE_NUMBER: u32 = 0x9198a1;
-    pub const ACCENT: u32 = 0x4493f8;
-    pub const ACCENT_SELECTED: u32 = 0x1f6feb;
-    pub const CREATED: u32 = 0x3fb950;
-    pub const CREATED_BACKGROUND: u32 = 0x2ea04326;
-    pub const DELETED: u32 = 0xf85149;
-    pub const DELETED_BACKGROUND: u32 = 0xf851491a;
-}
-
-actions!(jj_gpui_diff, [Quit, ToggleDiffView]);
+actions!(
+    jj_gpui_diff,
+    [Quit, ToggleDiffView, SetThemeAuto, SetThemeLight, SetThemeDark]
+);
 
 fn quit(_: &Quit, cx: &mut App) {
     cx.quit();
@@ -77,10 +60,95 @@ enum DiffView {
     Split,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ThemePreference {
+    #[default]
+    Auto,
+    Light,
+    Dark,
+}
+
+#[derive(Clone, Copy)]
+struct ThemePalette {
+    background: gpui::Rgba,
+    elevated_surface_background: gpui::Rgba,
+    subheader_background: gpui::Rgba,
+    element_background: gpui::Rgba,
+    element_hover: gpui::Rgba,
+    border: gpui::Rgba,
+    text: gpui::Rgba,
+    muted_text: gpui::Rgba,
+    line_number: gpui::Rgba,
+    accent: gpui::Rgba,
+    accent_selected: gpui::Rgba,
+    accent_text: gpui::Rgba,
+    created: gpui::Rgba,
+    created_background: gpui::Rgba,
+    deleted: gpui::Rgba,
+    deleted_background: gpui::Rgba,
+}
+
+impl ThemePalette {
+    // GitHub palettes from github.com/PyaeSoneAungRgn/github-zed-theme.
+    fn light() -> Self {
+        Self {
+            background: rgb(0xffffff),
+            elevated_surface_background: rgb(0xffffff),
+            subheader_background: rgb(0xf6f8fa),
+            element_background: rgba(0x818b981f),
+            element_hover: rgba(0x818b981f),
+            border: rgb(0xd1d9e0),
+            text: rgb(0x1f2328),
+            muted_text: rgb(0x59636e),
+            line_number: rgb(0x59636e),
+            accent: rgb(0x0969da),
+            accent_selected: rgb(0x0969da),
+            accent_text: rgb(0xffffff),
+            created: rgb(0x1a7f37),
+            created_background: rgb(0xdafbe1),
+            deleted: rgb(0xd1242f),
+            deleted_background: rgb(0xffebe9),
+        }
+    }
+
+    fn dark() -> Self {
+        Self {
+            background: rgb(0x0d1117),
+            elevated_surface_background: rgb(0x010409),
+            subheader_background: rgb(0x151b23),
+            element_background: rgba(0x656c7633),
+            element_hover: rgba(0x656c7633),
+            border: rgb(0x3d444d),
+            text: rgb(0xf0f6fc),
+            muted_text: rgb(0x9198a1),
+            line_number: rgb(0x9198a1),
+            accent: rgb(0x4493f8),
+            accent_selected: rgb(0x1f6feb),
+            accent_text: rgb(0xffffff),
+            created: rgb(0x3fb950),
+            created_background: rgba(0x2ea04326),
+            deleted: rgb(0xf85149),
+            deleted_background: rgba(0xf851491a),
+        }
+    }
+
+    fn resolve(preference: ThemePreference, appearance: WindowAppearance) -> Self {
+        match preference {
+            ThemePreference::Light => Self::light(),
+            ThemePreference::Dark => Self::dark(),
+            ThemePreference::Auto => match appearance {
+                WindowAppearance::Light | WindowAppearance::VibrantLight => Self::light(),
+                WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::dark(),
+            },
+        }
+    }
+}
+
 struct DiffViewer {
     repository: PathBuf,
     snapshot: Snapshot,
     view: DiffView,
+    theme: ThemePreference,
 }
 
 impl DiffViewer {
@@ -96,10 +164,16 @@ impl DiffViewer {
         };
         cx.notify();
     }
+
+    fn set_theme(&mut self, theme: ThemePreference, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
+    }
 }
 
 impl Render for DiffViewer {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = ThemePalette::resolve(self.theme, window.appearance());
         let mut file_list = div().flex().flex_col().gap_4().p_4();
 
         if let Some(message) = &self.snapshot.message {
@@ -107,10 +181,10 @@ impl Render for DiffViewer {
                 div()
                     .rounded_md()
                     .border_1()
-                    .border_color(rgb(github_dark::BORDER))
-                    .bg(rgb(github_dark::SUBHEADER_BACKGROUND))
+                    .border_color(palette.border)
+                    .bg(palette.subheader_background)
                     .p_4()
-                    .text_color(rgb(github_dark::TEXT))
+                    .text_color(palette.text)
                     .child(message.clone()),
             );
         } else if self.snapshot.files.is_empty() {
@@ -118,15 +192,15 @@ impl Render for DiffViewer {
                 div()
                     .rounded_md()
                     .border_1()
-                    .border_color(rgb(github_dark::BORDER))
-                    .bg(rgb(github_dark::ELEVATED_SURFACE_BACKGROUND))
+                    .border_color(palette.border)
+                    .bg(palette.elevated_surface_background)
                     .p_4()
-                    .text_color(rgb(github_dark::MUTED_TEXT))
+                    .text_color(palette.muted_text)
                     .child("The working-copy changeset has no file changes."),
             );
         } else {
             for file in &self.snapshot.files {
-                file_list = file_list.child(file_element(file, self.view));
+                file_list = file_list.child(file_element(file, self.view, palette));
             }
         }
 
@@ -134,14 +208,26 @@ impl Render for DiffViewer {
             DiffView::Unified => "Split view",
             DiffView::Split => "Unified view",
         };
+        let auto_theme = self.theme == ThemePreference::Auto;
+        let light_theme = self.theme == ThemePreference::Light;
+        let dark_theme = self.theme == ThemePreference::Dark;
 
         div()
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(github_dark::BACKGROUND))
-            .text_color(rgb(github_dark::TEXT))
+            .bg(palette.background)
+            .text_color(palette.text)
             .on_action(cx.listener(|this, _: &ToggleDiffView, _, cx| this.toggle_view(cx)))
+            .on_action(cx.listener(|this, _: &SetThemeAuto, _, cx| {
+                this.set_theme(ThemePreference::Auto, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SetThemeLight, _, cx| {
+                this.set_theme(ThemePreference::Light, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SetThemeDark, _, cx| {
+                this.set_theme(ThemePreference::Dark, cx)
+            }))
             .child(
                 div()
                     .flex_none()
@@ -151,8 +237,8 @@ impl Render for DiffViewer {
                     .px_4()
                     .py_3()
                     .border_b_1()
-                    .border_color(rgb(github_dark::BORDER))
-                    .bg(rgb(github_dark::SUBHEADER_BACKGROUND))
+                    .border_color(palette.border)
+                    .bg(palette.subheader_background)
                     .child(
                         div()
                             .flex()
@@ -162,7 +248,7 @@ impl Render for DiffViewer {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(rgb(github_dark::MUTED_TEXT))
+                                    .text_color(palette.muted_text)
                                     .child(format!("{}  ·  {}", self.repository.display(), self.snapshot.change)),
                             ),
                     )
@@ -173,16 +259,124 @@ impl Render for DiffViewer {
                             .gap_2()
                             .child(
                                 div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(palette.muted_text)
+                                            .child("Theme"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("theme-auto")
+                                            .cursor_pointer()
+                                            .rounded_md()
+                                            .border_1()
+                                            .border_color(palette.border)
+                                            .bg(if auto_theme {
+                                                palette.accent_selected
+                                            } else {
+                                                palette.element_background
+                                            })
+                                            .px_2()
+                                            .py_1()
+                                            .text_sm()
+                                            .text_color(if auto_theme {
+                                                palette.accent_text
+                                            } else {
+                                                palette.text
+                                            })
+                                            .hover(|style| {
+                                                style.bg(if auto_theme {
+                                                    palette.accent
+                                                } else {
+                                                    palette.element_hover
+                                                })
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.set_theme(ThemePreference::Auto, cx)
+                                            }))
+                                            .child("Auto"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("theme-light")
+                                            .cursor_pointer()
+                                            .rounded_md()
+                                            .border_1()
+                                            .border_color(palette.border)
+                                            .bg(if light_theme {
+                                                palette.accent_selected
+                                            } else {
+                                                palette.element_background
+                                            })
+                                            .px_2()
+                                            .py_1()
+                                            .text_sm()
+                                            .text_color(if light_theme {
+                                                palette.accent_text
+                                            } else {
+                                                palette.text
+                                            })
+                                            .hover(|style| {
+                                                style.bg(if light_theme {
+                                                    palette.accent
+                                                } else {
+                                                    palette.element_hover
+                                                })
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.set_theme(ThemePreference::Light, cx)
+                                            }))
+                                            .child("Light"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("theme-dark")
+                                            .cursor_pointer()
+                                            .rounded_md()
+                                            .border_1()
+                                            .border_color(palette.border)
+                                            .bg(if dark_theme {
+                                                palette.accent_selected
+                                            } else {
+                                                palette.element_background
+                                            })
+                                            .px_2()
+                                            .py_1()
+                                            .text_sm()
+                                            .text_color(if dark_theme {
+                                                palette.accent_text
+                                            } else {
+                                                palette.text
+                                            })
+                                            .hover(|style| {
+                                                style.bg(if dark_theme {
+                                                    palette.accent
+                                                } else {
+                                                    palette.element_hover
+                                                })
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.set_theme(ThemePreference::Dark, cx)
+                                            }))
+                                            .child("Dark"),
+                                    ),
+                            )
+                            .child(
+                                div()
                                     .id("toggle-diff-view")
                                     .cursor_pointer()
                                     .rounded_md()
                                     .border_1()
-                                    .border_color(rgb(github_dark::BORDER))
-                                    .bg(rgb(github_dark::ELEMENT_BACKGROUND))
+                                    .border_color(palette.border)
+                                    .bg(palette.element_background)
                                     .px_3()
                                     .py_1()
                                     .text_sm()
-                                    .hover(|style| style.bg(rgba(github_dark::ELEMENT_HOVER)))
+                                    .hover(|style| style.bg(palette.element_hover))
                                     .on_click(cx.listener(|this, _, _, cx| this.toggle_view(cx)))
                                     .child(view_button_label),
                             )
@@ -192,12 +386,13 @@ impl Render for DiffViewer {
                                     .cursor_pointer()
                                     .rounded_md()
                                     .border_1()
-                                    .border_color(rgb(github_dark::ACCENT))
-                                    .bg(rgb(github_dark::ACCENT_SELECTED))
+                                    .border_color(palette.accent)
+                                    .bg(palette.accent_selected)
                                     .px_3()
                                     .py_1()
                                     .text_sm()
-                                    .hover(|style| style.bg(rgb(github_dark::ACCENT)))
+                                    .text_color(palette.accent_text)
+                                    .hover(|style| style.bg(palette.accent))
                                     .on_click(cx.listener(|this, _, _, cx| this.reload(cx)))
                                     .child("Refresh"),
                             ),
@@ -213,18 +408,18 @@ impl Render for DiffViewer {
     }
 }
 
-fn file_element(file: &DiffFile, view: DiffView) -> impl IntoElement {
+fn file_element(file: &DiffFile, view: DiffView, palette: ThemePalette) -> impl IntoElement {
     let rows = match view {
-        DiffView::Unified => unified_rows_element(file),
-        DiffView::Split => split_rows_element(file),
+        DiffView::Unified => unified_rows_element(file, palette),
+        DiffView::Split => split_rows_element(file, palette),
     };
 
     div()
         .rounded_lg()
         .overflow_hidden()
         .border_1()
-        .border_color(rgb(github_dark::BORDER))
-        .bg(rgb(github_dark::BACKGROUND))
+        .border_color(palette.border)
+        .bg(palette.background)
         .child(
             div()
                 .flex()
@@ -232,7 +427,7 @@ fn file_element(file: &DiffFile, view: DiffView) -> impl IntoElement {
                 .justify_between()
                 .px_3()
                 .py_2()
-                .bg(rgb(github_dark::SUBHEADER_BACKGROUND))
+                .bg(palette.subheader_background)
                 .child(div().font_family("Menlo").text_sm().child(file.path.clone()))
                 .child(
                     div()
@@ -240,12 +435,12 @@ fn file_element(file: &DiffFile, view: DiffView) -> impl IntoElement {
                         .text_sm()
                         .child(
                             div()
-                                .text_color(rgb(github_dark::CREATED))
+                                .text_color(palette.created)
                                 .child(format!("+{}", file.additions)),
                         )
                         .child(
                             div()
-                                .text_color(rgb(github_dark::DELETED))
+                                .text_color(palette.deleted)
                                 .child(format!(" −{}", file.deletions)),
                         ),
                 ),
@@ -253,17 +448,17 @@ fn file_element(file: &DiffFile, view: DiffView) -> impl IntoElement {
         .child(rows)
 }
 
-fn unified_rows_element(file: &DiffFile) -> gpui::AnyElement {
+fn unified_rows_element(file: &DiffFile, palette: ThemePalette) -> gpui::AnyElement {
     let mut rows = div()
         .id(SharedString::from(file.path.clone()))
         .font_family("Menlo")
         .text_sm()
         .overflow_x_scroll()
         .border_t_1()
-        .border_color(rgb(github_dark::BORDER));
+        .border_color(palette.border);
 
     for row in &file.rows {
-        let (background, marker, marker_color) = row_appearance(row.kind);
+        let (background, marker, marker_color) = row_appearance(row.kind, palette);
         let old_number = row.old_line.map_or_else(String::new, |n| n.to_string());
         let new_number = row.new_line.map_or_else(String::new, |n| n.to_string());
         rows = rows.child(
@@ -276,7 +471,7 @@ fn unified_rows_element(file: &DiffFile) -> gpui::AnyElement {
                         .w(px(46.))
                         .pr_2()
                         .text_right()
-                        .text_color(rgb(github_dark::LINE_NUMBER))
+                        .text_color(palette.line_number)
                         .child(old_number),
                 )
                 .child(
@@ -284,14 +479,14 @@ fn unified_rows_element(file: &DiffFile) -> gpui::AnyElement {
                         .w(px(46.))
                         .pr_2()
                         .text_right()
-                        .text_color(rgb(github_dark::LINE_NUMBER))
+                        .text_color(palette.line_number)
                         .child(new_number),
                 )
                 .child(div().w(px(20.)).text_color(marker_color).child(marker))
                 .child(
                     div()
                         .whitespace_nowrap()
-                        .text_color(rgb(github_dark::TEXT))
+                        .text_color(palette.text)
                         .child(row.text.replace('\t', "    ")),
                 ),
         );
@@ -300,34 +495,34 @@ fn unified_rows_element(file: &DiffFile) -> gpui::AnyElement {
     rows.into_any_element()
 }
 
-fn split_rows_element(file: &DiffFile) -> gpui::AnyElement {
+fn split_rows_element(file: &DiffFile, palette: ThemePalette) -> gpui::AnyElement {
     let mut rows = div()
         .id(SharedString::from(format!("{}-split", file.path)))
         .font_family("Menlo")
         .text_sm()
         .overflow_x_scroll()
         .border_t_1()
-        .border_color(rgb(github_dark::BORDER));
+        .border_color(palette.border);
 
     for row in split_rows(&file.rows) {
         rows = rows.child(
             div()
                 .flex()
                 .min_w(px(800.))
-                .child(split_cell(row.before, true))
-                .child(split_cell(row.after, false)),
+                .child(split_cell(row.before, true, palette))
+                .child(split_cell(row.after, false, palette)),
         );
     }
 
     rows.into_any_element()
 }
 
-fn split_cell(row: Option<&DiffRow>, before: bool) -> gpui::Div {
+fn split_cell(row: Option<&DiffRow>, before: bool, palette: ThemePalette) -> gpui::Div {
     let Some(row) = row else {
-        return div().flex_1().bg(rgb(github_dark::BACKGROUND));
+        return div().flex_1().bg(palette.background);
     };
 
-    let (background, marker, marker_color) = row_appearance(row.kind);
+    let (background, marker, marker_color) = row_appearance(row.kind, palette);
     let number = if before { row.old_line } else { row.new_line }
         .map_or_else(String::new, |n| n.to_string());
 
@@ -338,7 +533,7 @@ fn split_cell(row: Option<&DiffRow>, before: bool) -> gpui::Div {
         .when(!before, |element| {
             element
                 .border_l_1()
-                .border_color(rgb(github_dark::BORDER))
+                .border_color(palette.border)
         })
         .child(
             div()
@@ -346,7 +541,7 @@ fn split_cell(row: Option<&DiffRow>, before: bool) -> gpui::Div {
                 .flex_none()
                 .pr_2()
                 .text_right()
-                .text_color(rgb(github_dark::LINE_NUMBER))
+                .text_color(palette.line_number)
                 .child(number),
         )
         .child(
@@ -359,33 +554,20 @@ fn split_cell(row: Option<&DiffRow>, before: bool) -> gpui::Div {
         .child(
             div()
                 .whitespace_nowrap()
-                .text_color(rgb(github_dark::TEXT))
+                .text_color(palette.text)
                 .child(row.text.replace('\t', "    ")),
         )
 }
 
-fn row_appearance(kind: RowKind) -> (gpui::Rgba, &'static str, gpui::Rgba) {
+fn row_appearance(
+    kind: RowKind,
+    palette: ThemePalette,
+) -> (gpui::Rgba, &'static str, gpui::Rgba) {
     match kind {
-        RowKind::Context => (
-            rgb(github_dark::BACKGROUND),
-            " ",
-            rgb(github_dark::MUTED_TEXT),
-        ),
-        RowKind::Added => (
-            rgba(github_dark::CREATED_BACKGROUND),
-            "+",
-            rgb(github_dark::CREATED),
-        ),
-        RowKind::Deleted => (
-            rgba(github_dark::DELETED_BACKGROUND),
-            "−",
-            rgb(github_dark::DELETED),
-        ),
-        RowKind::Collapsed => (
-            rgb(github_dark::SUBHEADER_BACKGROUND),
-            "…",
-            rgb(github_dark::MUTED_TEXT),
-        ),
+        RowKind::Context => (palette.background, " ", palette.muted_text),
+        RowKind::Added => (palette.created_background, "+", palette.created),
+        RowKind::Deleted => (palette.deleted_background, "−", palette.deleted),
+        RowKind::Collapsed => (palette.subheader_background, "…", palette.muted_text),
     }
 }
 
@@ -648,7 +830,18 @@ fn main() {
             },
             Menu {
                 name: "View".into(),
-                items: vec![MenuItem::action("Toggle Diff View", ToggleDiffView)],
+                items: vec![
+                    MenuItem::action("Toggle Diff View", ToggleDiffView),
+                    MenuItem::separator(),
+                    MenuItem::submenu(Menu {
+                        name: "Theme".into(),
+                        items: vec![
+                            MenuItem::action("Auto", SetThemeAuto),
+                            MenuItem::action("Light", SetThemeLight),
+                            MenuItem::action("Dark", SetThemeDark),
+                        ],
+                    }),
+                ],
             },
         ]);
 
@@ -658,11 +851,16 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| {
-                cx.new(|_| DiffViewer {
-                    repository,
-                    snapshot: initial_snapshot,
-                    view: DiffView::default(),
+            |window, cx| {
+                cx.new(|cx| {
+                    cx.observe_window_appearance(window, |_, window, _| window.refresh())
+                        .detach();
+                    DiffViewer {
+                        repository,
+                        snapshot: initial_snapshot,
+                        view: DiffView::default(),
+                        theme: ThemePreference::default(),
+                    }
                 })
             },
         )
@@ -697,5 +895,14 @@ mod tests {
             row.before.is_none()
                 && row.after.map(|line| line.text.as_str()) == Some("four")
         }));
+    }
+
+    #[test]
+    fn auto_theme_follows_window_appearance() {
+        let light = ThemePalette::resolve(ThemePreference::Auto, WindowAppearance::Light);
+        let dark = ThemePalette::resolve(ThemePreference::Auto, WindowAppearance::Dark);
+
+        assert_eq!(light.background, rgb(0xffffff));
+        assert_eq!(dark.background, rgb(0x0d1117));
     }
 }
