@@ -1112,26 +1112,24 @@ fn diff_rows(before: &str, after: &str) -> (Vec<DiffRow>, usize, usize) {
         let deleted_row_start = rows.len();
         for (offset, line) in before_lines[before_range.clone()].iter().enumerate() {
             let text = display_line(line);
-            let word_highlights = (!text.is_empty()).then_some(0..text.len()).into_iter().collect();
             rows.push(DiffRow {
                 kind: RowKind::Deleted,
                 old_line: Some(before_range.start + offset + 1),
                 new_line: None,
                 text,
-                word_highlights,
+                word_highlights: vec![],
             });
             deletions += 1;
         }
         let added_row_start = rows.len();
         for (offset, line) in after_lines[after_range.clone()].iter().enumerate() {
             let text = display_line(line);
-            let word_highlights = (!text.is_empty()).then_some(0..text.len()).into_iter().collect();
             rows.push(DiffRow {
                 kind: RowKind::Added,
                 old_line: None,
                 new_line: Some(after_range.start + offset + 1),
                 text,
-                word_highlights,
+                word_highlights: vec![],
             });
             additions += 1;
         }
@@ -1309,14 +1307,22 @@ mod tests {
     }
 
     #[test]
-    fn highlights_the_whole_text_of_an_unpaired_added_line() {
-        let (rows, _, _) = diff_rows("", "entirely new line\n");
-        let added = rows
+    fn does_not_word_highlight_whole_added_or_removed_lines() {
+        let (added_rows, _, _) = diff_rows("", "entirely new line\n");
+        let (deleted_rows, _, _) = diff_rows("entirely removed line\n", "");
+
+        assert!(added_rows
             .iter()
             .find(|row| row.kind == RowKind::Added)
-            .expect("an added row");
-
-        assert_eq!(added.word_highlights, vec![0..added.text.len()]);
+            .expect("an added row")
+            .word_highlights
+            .is_empty());
+        assert!(deleted_rows
+            .iter()
+            .find(|row| row.kind == RowKind::Deleted)
+            .expect("a deleted row")
+            .word_highlights
+            .is_empty());
     }
 
     #[test]
