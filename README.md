@@ -40,6 +40,17 @@ cd /path/to/jj-checkout
 cargo +stable run --manifest-path /path/to/2026-08-14-stratton/Cargo.toml
 ```
 
+### Live layout inspector
+
+Launch with `--debug-layout` to show an in-app layout inspector:
+
+```sh
+cd /path/to/jj-checkout
+/path/to/2026-08-14-stratton/target/release/jj-gpui-diff --debug-layout
+```
+
+The inspector's −/+ controls update toolbar, diff-row, file-header, line-number, marker, and split-view dimensions immediately. **Reset** restores the built-in values, and the **Layout** toolbar button hides or shows the panel. Values are intentionally session-only. The `JJ_GPUI_DEBUG_LAYOUT=1` environment variable enables the same mode.
+
 ## How it gets the diff
 
 1. `jj root` resolves the repository from the launch directory.

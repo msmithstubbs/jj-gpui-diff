@@ -9,13 +9,12 @@ use std::{
 use gpui::{
     actions, div, px, rgb, rgba, size, uniform_list, App, Application, Bounds, Context,
     HighlightStyle, IntoElement, KeyBinding, ListHorizontalSizingBehavior, Menu, MenuItem, Render,
-    StyledText, Window, WindowAppearance, WindowBounds, WindowOptions,
+    StatefulInteractiveElement, StyledText, Window, WindowAppearance, WindowBounds, WindowOptions,
 };
 use gpui::prelude::*;
 use imara_diff::{Algorithm, Diff, InternedInput};
 
 const CONTEXT_LINES: usize = 3;
-const DIFF_ROW_HEIGHT: f32 = 22.;
 
 actions!(
     jj_gpui_diff,
@@ -167,6 +166,138 @@ impl ThemePalette {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LayoutSettings {
+    toolbar_padding_x: f32,
+    toolbar_padding_y: f32,
+    diff_padding_x: f32,
+    row_height: f32,
+    file_header_padding_x: f32,
+    file_header_gap: f32,
+    file_actions_gap: f32,
+    disclosure_width: f32,
+    accepted_box_size: f32,
+    line_number_width: f32,
+    line_number_padding: f32,
+    marker_width: f32,
+    split_min_width: f32,
+}
+
+impl Default for LayoutSettings {
+    fn default() -> Self {
+        Self {
+            toolbar_padding_x: 16.,
+            toolbar_padding_y: 12.,
+            diff_padding_x: 16.,
+            row_height: 22.,
+            file_header_padding_x: 24.,
+            file_header_gap: 8.,
+            file_actions_gap: 12.,
+            disclosure_width: 20.,
+            accepted_box_size: 16.,
+            line_number_width: 46.,
+            line_number_padding: 8.,
+            marker_width: 20.,
+            split_min_width: 800.,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LayoutSetting {
+    ToolbarPaddingX,
+    ToolbarPaddingY,
+    DiffPaddingX,
+    RowHeight,
+    FileHeaderPaddingX,
+    FileHeaderGap,
+    FileActionsGap,
+    DisclosureWidth,
+    AcceptedBoxSize,
+    LineNumberWidth,
+    LineNumberPadding,
+    MarkerWidth,
+    SplitMinWidth,
+}
+
+const LAYOUT_CONTROLS: [(&str, LayoutSetting); 13] = [
+    ("Toolbar inset X", LayoutSetting::ToolbarPaddingX),
+    ("Toolbar inset Y", LayoutSetting::ToolbarPaddingY),
+    ("Diff inset X", LayoutSetting::DiffPaddingX),
+    ("Diff row height Y", LayoutSetting::RowHeight),
+    ("File header inset X", LayoutSetting::FileHeaderPaddingX),
+    ("Filename gap X", LayoutSetting::FileHeaderGap),
+    ("File actions gap X", LayoutSetting::FileActionsGap),
+    ("Disclosure width X", LayoutSetting::DisclosureWidth),
+    ("Accepted box size", LayoutSetting::AcceptedBoxSize),
+    ("Line number width X", LayoutSetting::LineNumberWidth),
+    ("Line number inset X", LayoutSetting::LineNumberPadding),
+    ("Marker width X", LayoutSetting::MarkerWidth),
+    ("Split minimum width X", LayoutSetting::SplitMinWidth),
+];
+
+impl LayoutSetting {
+    fn index(self) -> usize {
+        self as usize
+    }
+
+    fn step(self) -> f32 {
+        match self {
+            Self::SplitMinWidth => 10.,
+            _ => 1.,
+        }
+    }
+
+    fn minimum(self) -> f32 {
+        match self {
+            Self::RowHeight => 14.,
+            Self::AcceptedBoxSize => 8.,
+            Self::LineNumberWidth | Self::DisclosureWidth | Self::MarkerWidth => 10.,
+            Self::SplitMinWidth => 200.,
+            _ => 0.,
+        }
+    }
+}
+
+impl LayoutSettings {
+    fn value(self, setting: LayoutSetting) -> f32 {
+        match setting {
+            LayoutSetting::ToolbarPaddingX => self.toolbar_padding_x,
+            LayoutSetting::ToolbarPaddingY => self.toolbar_padding_y,
+            LayoutSetting::DiffPaddingX => self.diff_padding_x,
+            LayoutSetting::RowHeight => self.row_height,
+            LayoutSetting::FileHeaderPaddingX => self.file_header_padding_x,
+            LayoutSetting::FileHeaderGap => self.file_header_gap,
+            LayoutSetting::FileActionsGap => self.file_actions_gap,
+            LayoutSetting::DisclosureWidth => self.disclosure_width,
+            LayoutSetting::AcceptedBoxSize => self.accepted_box_size,
+            LayoutSetting::LineNumberWidth => self.line_number_width,
+            LayoutSetting::LineNumberPadding => self.line_number_padding,
+            LayoutSetting::MarkerWidth => self.marker_width,
+            LayoutSetting::SplitMinWidth => self.split_min_width,
+        }
+    }
+
+    fn set_value(&mut self, setting: LayoutSetting, value: f32) {
+        let value = value.max(setting.minimum());
+        match setting {
+            LayoutSetting::ToolbarPaddingX => self.toolbar_padding_x = value,
+            LayoutSetting::ToolbarPaddingY => self.toolbar_padding_y = value,
+            LayoutSetting::DiffPaddingX => self.diff_padding_x = value,
+            LayoutSetting::RowHeight => self.row_height = value,
+            LayoutSetting::FileHeaderPaddingX => self.file_header_padding_x = value,
+            LayoutSetting::FileHeaderGap => self.file_header_gap = value,
+            LayoutSetting::FileActionsGap => self.file_actions_gap = value,
+            LayoutSetting::DisclosureWidth => self.disclosure_width = value,
+            LayoutSetting::AcceptedBoxSize => self.accepted_box_size = value,
+            LayoutSetting::LineNumberWidth => self.line_number_width = value,
+            LayoutSetting::LineNumberPadding => self.line_number_padding = value,
+            LayoutSetting::MarkerWidth => self.marker_width = value,
+            LayoutSetting::SplitMinWidth => self.split_min_width = value,
+        }
+    }
+}
+
 struct DiffViewer {
     repository: PathBuf,
     snapshot: Arc<Snapshot>,
@@ -175,6 +306,9 @@ struct DiffViewer {
     widest_item: usize,
     view: DiffView,
     theme: ThemePreference,
+    debug_layout: bool,
+    debug_layout_panel_open: bool,
+    layout: LayoutSettings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,11 +395,28 @@ impl DiffViewer {
         self.theme = theme;
         cx.notify();
     }
+
+    fn toggle_debug_layout_panel(&mut self, cx: &mut Context<Self>) {
+        self.debug_layout_panel_open = !self.debug_layout_panel_open;
+        cx.notify();
+    }
+
+    fn adjust_layout(&mut self, setting: LayoutSetting, direction: f32, cx: &mut Context<Self>) {
+        let value = self.layout.value(setting) + direction * setting.step();
+        self.layout.set_value(setting, value);
+        cx.notify();
+    }
+
+    fn reset_layout(&mut self, cx: &mut Context<Self>) {
+        self.layout = LayoutSettings::default();
+        cx.notify();
+    }
 }
 
 impl Render for DiffViewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = ThemePalette::resolve(self.theme, window.appearance());
+        let layout = self.layout;
         let diff_content = if let Some(message) = &self.snapshot.message {
             div()
                 .p_4()
@@ -309,6 +460,7 @@ impl Render for DiffViewer {
                                 list_items[index],
                                 &this.file_states,
                                 palette,
+                                layout,
                                 cx,
                             )
                         })
@@ -318,7 +470,7 @@ impl Render for DiffViewer {
             .with_width_from_item(Some(self.widest_item))
             .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
             .size_full()
-            .px_4()
+            .px(px(layout.diff_padding_x))
             .into_any_element()
         };
 
@@ -352,8 +504,8 @@ impl Render for DiffViewer {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .px_4()
-                    .py_3()
+                    .px(px(layout.toolbar_padding_x))
+                    .py(px(layout.toolbar_padding_y))
                     .border_b_1()
                     .border_color(palette.border)
                     .bg(palette.subheader_background)
@@ -498,6 +650,40 @@ impl Render for DiffViewer {
                                     .on_click(cx.listener(|this, _, _, cx| this.toggle_view(cx)))
                                     .child(view_button_label),
                             )
+                            .when(self.debug_layout, |controls| {
+                                controls.child(
+                                    div()
+                                        .id("toggle-debug-layout")
+                                        .cursor_pointer()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(palette.border)
+                                        .bg(if self.debug_layout_panel_open {
+                                            palette.accent_selected
+                                        } else {
+                                            palette.element_background
+                                        })
+                                        .px_3()
+                                        .py_1()
+                                        .text_sm()
+                                        .text_color(if self.debug_layout_panel_open {
+                                            palette.accent_text
+                                        } else {
+                                            palette.text
+                                        })
+                                        .hover(|style| {
+                                            style.bg(if self.debug_layout_panel_open {
+                                                palette.accent
+                                            } else {
+                                                palette.element_hover
+                                            })
+                                        })
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.toggle_debug_layout_panel(cx)
+                                        }))
+                                        .child("Layout"),
+                                )
+                            })
                             .child(
                                 div()
                                     .id("refresh")
@@ -519,10 +705,156 @@ impl Render for DiffViewer {
             .child(
                 div()
                     .flex_1()
+                    .min_h_0()
+                    .flex()
                     .overflow_hidden()
-                    .child(diff_content),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(diff_content),
+                    )
+                    .when(self.debug_layout && self.debug_layout_panel_open, |body| {
+                        body.child(debug_layout_panel(self.layout, palette, cx))
+                    }),
             )
     }
+}
+
+fn debug_layout_panel(
+    layout: LayoutSettings,
+    palette: ThemePalette,
+    cx: &mut Context<DiffViewer>,
+) -> gpui::Div {
+    let controls = LAYOUT_CONTROLS
+        .into_iter()
+        .map(|(label, setting)| debug_layout_control(label, setting, layout, palette, cx))
+        .collect::<Vec<_>>();
+
+    div()
+        .w(px(292.))
+        .h_full()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .border_l_1()
+        .border_color(palette.border)
+        .bg(palette.elevated_surface_background)
+        .child(
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_between()
+                .px_3()
+                .py_2()
+                .border_b_1()
+                .border_color(palette.border)
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child("Layout inspector"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(palette.muted_text)
+                                .child("Live pixel values"),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("reset-debug-layout")
+                        .cursor_pointer()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(palette.border)
+                        .bg(palette.element_background)
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .hover(|style| style.bg(palette.element_hover))
+                        .on_click(cx.listener(|this, _, _, cx| this.reset_layout(cx)))
+                        .child("Reset"),
+                ),
+        )
+        .child(
+            div()
+                .id("debug-layout-controls")
+                .flex_1()
+                .overflow_y_scroll()
+                .p_3()
+                .children(controls),
+        )
+}
+
+fn debug_layout_control(
+    label: &'static str,
+    setting: LayoutSetting,
+    layout: LayoutSettings,
+    palette: ThemePalette,
+    cx: &mut Context<DiffViewer>,
+) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .py_1()
+        .child(div().flex_1().min_w_0().text_xs().child(label))
+        .child(
+            div()
+                .w(px(48.))
+                .text_right()
+                .font_family("Menlo")
+                .text_xs()
+                .text_color(palette.muted_text)
+                .child(format!("{:.0}", layout.value(setting))),
+        )
+        .child(
+            div()
+                .id(("debug-layout-minus", setting.index()))
+                .w(px(24.))
+                .h(px(24.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .rounded_sm()
+                .border_1()
+                .border_color(palette.border)
+                .bg(palette.element_background)
+                .hover(|style| style.bg(palette.element_hover))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.adjust_layout(setting, -1., cx)
+                }))
+                .child("−"),
+        )
+        .child(
+            div()
+                .id(("debug-layout-plus", setting.index()))
+                .w(px(24.))
+                .h(px(24.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .rounded_sm()
+                .border_1()
+                .border_color(palette.border)
+                .bg(palette.element_background)
+                .hover(|style| style.bg(palette.element_hover))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.adjust_layout(setting, 1., cx)
+                }))
+                .child("+"),
+        )
 }
 
 fn render_diff_list_item(
@@ -530,6 +862,7 @@ fn render_diff_list_item(
     item: DiffListItem,
     file_states: &[FileViewState],
     palette: ThemePalette,
+    layout: LayoutSettings,
     cx: &mut Context<DiffViewer>,
 ) -> gpui::AnyElement {
     match item {
@@ -537,13 +870,13 @@ fn render_diff_list_item(
             let diff_file = &snapshot.files[file];
             let state = file_states[file];
             div()
-                .h(px(DIFF_ROW_HEIGHT))
+                .h(px(layout.row_height))
                 .flex_none()
                 .flex()
                 .min_w_full()
                 .items_center()
                 .justify_between()
-                .px_6()
+                .px(px(layout.file_header_padding_x))
                 .border_b_1()
                 .border_color(palette.border)
                 .bg(palette.subheader_background)
@@ -554,12 +887,12 @@ fn render_diff_list_item(
                         .flex()
                         .flex_1()
                         .items_center()
-                        .gap_2()
+                        .gap(px(layout.file_header_gap))
                         .min_w_0()
                         .child(
                             div()
                                 .id(("file-disclosure", file))
-                                .w(px(20.))
+                                .w(px(layout.disclosure_width))
                                 .flex_none()
                                 .cursor_pointer()
                                 .text_color(palette.muted_text)
@@ -580,7 +913,7 @@ fn render_diff_list_item(
                         .flex()
                         .flex_none()
                         .items_center()
-                        .gap_3()
+                        .gap(px(layout.file_actions_gap))
                         .child(
                             div()
                                 .id(("file-accepted", file))
@@ -599,8 +932,8 @@ fn render_diff_list_item(
                                 }))
                                 .child(
                                     div()
-                                        .w(px(16.))
-                                        .h(px(16.))
+                                        .w(px(layout.accepted_box_size))
+                                        .h(px(layout.accepted_box_size))
                                         .flex()
                                         .items_center()
                                         .justify_center()
@@ -638,7 +971,7 @@ fn render_diff_list_item(
                 .into_any_element()
         }
         DiffListItem::UnifiedRow { file, row } => {
-            unified_row_element(&snapshot.files[file].rows[row], palette)
+            unified_row_element(&snapshot.files[file].rows[row], palette, layout)
         }
         DiffListItem::SplitRow {
             file,
@@ -647,32 +980,36 @@ fn render_diff_list_item(
         } => {
             let rows = &snapshot.files[file].rows;
             div()
-                .h(px(DIFF_ROW_HEIGHT))
+                .h(px(layout.row_height))
                 .flex_none()
                 .flex()
                 .w_full()
-                .min_w(px(800.))
+                .min_w(px(layout.split_min_width))
                 .font_family("Menlo")
                 .text_sm()
-                .child(split_cell(before.map(|row| &rows[row]), true, palette))
-                .child(split_cell(after.map(|row| &rows[row]), false, palette))
+                .child(split_cell(before.map(|row| &rows[row]), true, palette, layout))
+                .child(split_cell(after.map(|row| &rows[row]), false, palette, layout))
                 .into_any_element()
         }
         DiffListItem::FileSeparator => div()
-            .h(px(DIFF_ROW_HEIGHT))
+            .h(px(layout.row_height))
             .flex_none()
             .bg(palette.background)
             .into_any_element(),
     }
 }
 
-fn unified_row_element(row: &DiffRow, palette: ThemePalette) -> gpui::AnyElement {
+fn unified_row_element(
+    row: &DiffRow,
+    palette: ThemePalette,
+    layout: LayoutSettings,
+) -> gpui::AnyElement {
     let (background, marker, marker_color) = row_appearance(row.kind, palette);
     let old_number = row.old_line.map_or_else(String::new, |n| n.to_string());
     let new_number = row.new_line.map_or_else(String::new, |n| n.to_string());
 
     div()
-        .h(px(DIFF_ROW_HEIGHT))
+        .h(px(layout.row_height))
         .flex_none()
         .flex()
         .min_w_full()
@@ -681,25 +1018,25 @@ fn unified_row_element(row: &DiffRow, palette: ThemePalette) -> gpui::AnyElement
         .text_sm()
         .child(
             div()
-                .w(px(46.))
+                .w(px(layout.line_number_width))
                 .flex_none()
-                .pr_2()
+                .pr(px(layout.line_number_padding))
                 .text_right()
                 .text_color(palette.line_number)
                 .child(old_number),
         )
         .child(
             div()
-                .w(px(46.))
+                .w(px(layout.line_number_width))
                 .flex_none()
-                .pr_2()
+                .pr(px(layout.line_number_padding))
                 .text_right()
                 .text_color(palette.line_number)
                 .child(new_number),
         )
         .child(
             div()
-                .w(px(20.))
+                .w(px(layout.marker_width))
                 .flex_none()
                 .text_color(marker_color)
                 .child(marker),
@@ -713,7 +1050,12 @@ fn unified_row_element(row: &DiffRow, palette: ThemePalette) -> gpui::AnyElement
         .into_any_element()
 }
 
-fn split_cell(row: Option<&DiffRow>, before: bool, palette: ThemePalette) -> gpui::Div {
+fn split_cell(
+    row: Option<&DiffRow>,
+    before: bool,
+    palette: ThemePalette,
+    layout: LayoutSettings,
+) -> gpui::Div {
     let Some(row) = row else {
         return div()
             .flex_1()
@@ -739,16 +1081,16 @@ fn split_cell(row: Option<&DiffRow>, before: bool, palette: ThemePalette) -> gpu
         })
         .child(
             div()
-                .w(px(46.))
+                .w(px(layout.line_number_width))
                 .flex_none()
-                .pr_2()
+                .pr(px(layout.line_number_padding))
                 .text_right()
                 .text_color(palette.line_number)
                 .child(number),
         )
         .child(
             div()
-                .w(px(20.))
+                .w(px(layout.marker_width))
                 .flex_none()
                 .text_color(marker_color)
                 .child(marker),
@@ -1195,8 +1537,16 @@ fn display_line(line: &str) -> String {
         .replace('\t', "    ")
 }
 
+fn debug_layout_requested() -> bool {
+    env::args_os().any(|argument| argument == "--debug-layout")
+        || env::var("JJ_GPUI_DEBUG_LAYOUT").is_ok_and(|value| {
+            matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes")
+        })
+}
+
 fn main() {
     let repository = env::current_dir().expect("the current directory must be available");
+    let debug_layout = debug_layout_requested();
     let initial_snapshot = Arc::new(load_snapshot(&repository));
     let initial_file_states = vec![FileViewState::default(); initial_snapshot.files.len()];
     let (initial_list_items, widest_item) =
@@ -1247,6 +1597,9 @@ fn main() {
                         widest_item,
                         view: DiffView::default(),
                         theme: ThemePreference::default(),
+                        debug_layout,
+                        debug_layout_panel_open: debug_layout,
+                        layout: LayoutSettings::default(),
                     }
                 })
             },
@@ -1332,6 +1685,19 @@ mod tests {
 
         assert_eq!(light.background, rgb(0xffffff));
         assert_eq!(dark.background, rgb(0x0d1117));
+    }
+
+    #[test]
+    fn layout_settings_enforce_usable_minimums() {
+        let mut layout = LayoutSettings::default();
+
+        layout.set_value(LayoutSetting::RowHeight, 1.);
+        layout.set_value(LayoutSetting::SplitMinWidth, 1.);
+        layout.set_value(LayoutSetting::DiffPaddingX, -1.);
+
+        assert_eq!(layout.row_height, 14.);
+        assert_eq!(layout.split_min_width, 200.);
+        assert_eq!(layout.diff_padding_x, 0.);
     }
 
     #[test]
