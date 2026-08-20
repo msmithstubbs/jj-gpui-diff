@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+step() {
+  printf '\n==> %s\n' "$1"
+  SECONDS=0
+}
+
+done_step() {
+  printf '    completed in %ss\n' "$SECONDS"
+}
+
+step "Installing system build dependencies"
+packages=(
+  build-essential
+  ca-certificates
+  curl
+  libfontconfig-dev
+  libfreetype-dev
+  pkg-config
+)
+missing_packages=()
+for package in "${packages[@]}"; do
+  if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq 'install ok installed'; then
+    missing_packages+=("$package")
+  fi
+done
+if ((${#missing_packages[@]})); then
+  sudo apt-get update
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_packages[@]}"
+else
+  echo "    already installed"
+fi
+done_step
+
+step "Installing the pinned Rust toolchain"
+if [[ ! -x "$HOME/.cargo/bin/rustup" ]]; then
+  curl --proto '=https' --tlsv1.2 -fsS https://sh.rustup.rs |
+    sh -s -- -y --profile minimal --no-modify-path
+fi
+# shellcheck disable=SC1091
+source "$HOME/.cargo/env"
+rustup show active-toolchain >/dev/null
+
+profile_marker="# jj-gpui-diff Rust toolchain"
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+  cat >> "$HOME/.bash_profile" <<'EOF'
+
+# jj-gpui-diff Rust toolchain
+[[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
+EOF
+fi
+done_step
+
+step "Installing Jujutsu"
+jj_version="0.44.0"
+install_jj=true
+if command -v jj >/dev/null 2>&1; then
+  installed_jj_version="$(jj --version | sed -nE 's/^jj ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')"
+  [[ "$installed_jj_version" == "$jj_version" ]] && install_jj=false
+fi
+if "$install_jj"; then
+  case "$(uname -m)" in
+    x86_64) jj_arch="x86_64" ;;
+    aarch64 | arm64) jj_arch="aarch64" ;;
+    *) echo "Unsupported architecture for Jujutsu: $(uname -m)" >&2; exit 1 ;;
+  esac
+  archive="jj-v${jj_version}-${jj_arch}-unknown-linux-musl.tar.gz"
+  temp_dir="$(mktemp -d)"
+  trap 'rm -rf "$temp_dir"' EXIT
+  curl --proto '=https' --tlsv1.2 -fsSL \
+    "https://github.com/jj-vcs/jj/releases/download/v${jj_version}/${archive}" |
+    tar -xz -C "$temp_dir"
+  install -m 0755 "$temp_dir/jj" "$HOME/.local/bin/jj"
+  rm -rf "$temp_dir"
+  trap - EXIT
+else
+  echo "    jj $jj_version already installed"
+fi
+done_step
+
+step "Fetching locked Cargo dependencies"
+cargo fetch --locked
+done_step
+
+echo
+echo "Orb setup complete."
