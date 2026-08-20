@@ -172,11 +172,15 @@ struct LayoutSettings {
     toolbar_padding_y: f32,
     diff_padding_x: f32,
     row_height: f32,
+    file_header_height: f32,
     file_header_padding_x: f32,
     file_header_gap: f32,
     file_actions_gap: f32,
     disclosure_width: f32,
+    disclosure_size: f32,
     accepted_box_size: f32,
+    file_action_width: f32,
+    diff_stat_width: f32,
     line_number_width: f32,
     line_number_padding: f32,
     marker_width: f32,
@@ -188,13 +192,17 @@ impl Default for LayoutSettings {
         Self {
             toolbar_padding_x: 16.,
             toolbar_padding_y: 12.,
-            diff_padding_x: 16.,
+            diff_padding_x: 0.,
             row_height: 22.,
+            file_header_height: 30.,
             file_header_padding_x: 24.,
             file_header_gap: 8.,
             file_actions_gap: 12.,
             disclosure_width: 20.,
-            accepted_box_size: 16.,
+            disclosure_size: 16.,
+            accepted_box_size: 14.,
+            file_action_width: 108.,
+            diff_stat_width: 48.,
             line_number_width: 46.,
             line_number_padding: 8.,
             marker_width: 20.,
@@ -209,27 +217,35 @@ enum LayoutSetting {
     ToolbarPaddingY,
     DiffPaddingX,
     RowHeight,
+    FileHeaderHeight,
     FileHeaderPaddingX,
     FileHeaderGap,
     FileActionsGap,
     DisclosureWidth,
+    DisclosureSize,
     AcceptedBoxSize,
+    FileActionWidth,
+    DiffStatWidth,
     LineNumberWidth,
     LineNumberPadding,
     MarkerWidth,
     SplitMinWidth,
 }
 
-const LAYOUT_CONTROLS: [(&str, LayoutSetting); 13] = [
+const LAYOUT_CONTROLS: [(&str, LayoutSetting); 17] = [
     ("Toolbar inset X", LayoutSetting::ToolbarPaddingX),
     ("Toolbar inset Y", LayoutSetting::ToolbarPaddingY),
     ("Diff inset X", LayoutSetting::DiffPaddingX),
     ("Diff row height Y", LayoutSetting::RowHeight),
+    ("File header height Y", LayoutSetting::FileHeaderHeight),
     ("File header inset X", LayoutSetting::FileHeaderPaddingX),
     ("Filename gap X", LayoutSetting::FileHeaderGap),
     ("File actions gap X", LayoutSetting::FileActionsGap),
     ("Disclosure width X", LayoutSetting::DisclosureWidth),
+    ("Disclosure size", LayoutSetting::DisclosureSize),
     ("Accepted box size", LayoutSetting::AcceptedBoxSize),
+    ("File action width X", LayoutSetting::FileActionWidth),
+    ("Diff stat width X", LayoutSetting::DiffStatWidth),
     ("Line number width X", LayoutSetting::LineNumberWidth),
     ("Line number inset X", LayoutSetting::LineNumberPadding),
     ("Marker width X", LayoutSetting::MarkerWidth),
@@ -250,9 +266,10 @@ impl LayoutSetting {
 
     fn minimum(self) -> f32 {
         match self {
-            Self::RowHeight => 14.,
-            Self::AcceptedBoxSize => 8.,
+            Self::RowHeight | Self::FileHeaderHeight => 14.,
+            Self::AcceptedBoxSize | Self::DisclosureSize => 8.,
             Self::LineNumberWidth | Self::DisclosureWidth | Self::MarkerWidth => 10.,
+            Self::FileActionWidth | Self::DiffStatWidth => 20.,
             Self::SplitMinWidth => 200.,
             _ => 0.,
         }
@@ -266,11 +283,15 @@ impl LayoutSettings {
             LayoutSetting::ToolbarPaddingY => self.toolbar_padding_y,
             LayoutSetting::DiffPaddingX => self.diff_padding_x,
             LayoutSetting::RowHeight => self.row_height,
+            LayoutSetting::FileHeaderHeight => self.file_header_height,
             LayoutSetting::FileHeaderPaddingX => self.file_header_padding_x,
             LayoutSetting::FileHeaderGap => self.file_header_gap,
             LayoutSetting::FileActionsGap => self.file_actions_gap,
             LayoutSetting::DisclosureWidth => self.disclosure_width,
+            LayoutSetting::DisclosureSize => self.disclosure_size,
             LayoutSetting::AcceptedBoxSize => self.accepted_box_size,
+            LayoutSetting::FileActionWidth => self.file_action_width,
+            LayoutSetting::DiffStatWidth => self.diff_stat_width,
             LayoutSetting::LineNumberWidth => self.line_number_width,
             LayoutSetting::LineNumberPadding => self.line_number_padding,
             LayoutSetting::MarkerWidth => self.marker_width,
@@ -285,11 +306,15 @@ impl LayoutSettings {
             LayoutSetting::ToolbarPaddingY => self.toolbar_padding_y = value,
             LayoutSetting::DiffPaddingX => self.diff_padding_x = value,
             LayoutSetting::RowHeight => self.row_height = value,
+            LayoutSetting::FileHeaderHeight => self.file_header_height = value,
             LayoutSetting::FileHeaderPaddingX => self.file_header_padding_x = value,
             LayoutSetting::FileHeaderGap => self.file_header_gap = value,
             LayoutSetting::FileActionsGap => self.file_actions_gap = value,
             LayoutSetting::DisclosureWidth => self.disclosure_width = value,
+            LayoutSetting::DisclosureSize => self.disclosure_size = value,
             LayoutSetting::AcceptedBoxSize => self.accepted_box_size = value,
+            LayoutSetting::FileActionWidth => self.file_action_width = value,
+            LayoutSetting::DiffStatWidth => self.diff_stat_width = value,
             LayoutSetting::LineNumberWidth => self.line_number_width = value,
             LayoutSetting::LineNumberPadding => self.line_number_padding = value,
             LayoutSetting::MarkerWidth => self.marker_width = value,
@@ -870,7 +895,7 @@ fn render_diff_list_item(
             let diff_file = &snapshot.files[file];
             let state = file_states[file];
             div()
-                .h(px(layout.row_height))
+                .h(px(layout.file_header_height))
                 .flex_none()
                 .flex()
                 .min_w_full()
@@ -894,6 +919,7 @@ fn render_diff_list_item(
                                 .id(("file-disclosure", file))
                                 .w(px(layout.disclosure_width))
                                 .flex_none()
+                                .text_size(px(layout.disclosure_size))
                                 .cursor_pointer()
                                 .text_color(palette.muted_text)
                                 .hover(|style| style.text_color(palette.text))
@@ -917,6 +943,8 @@ fn render_diff_list_item(
                         .child(
                             div()
                                 .id(("file-accepted", file))
+                                .w(px(layout.file_action_width))
+                                .flex_none()
                                 .flex()
                                 .items_center()
                                 .gap_1()
@@ -956,15 +984,20 @@ fn render_diff_list_item(
                         .child(
                             div()
                                 .flex()
+                                .flex_none()
                                 .child(
                                     div()
+                                        .w(px(layout.diff_stat_width))
+                                        .text_right()
                                         .text_color(palette.created)
                                         .child(format!("+{}", diff_file.additions)),
                                 )
                                 .child(
                                     div()
+                                        .w(px(layout.diff_stat_width))
+                                        .text_right()
                                         .text_color(palette.deleted)
-                                        .child(format!(" −{}", diff_file.deletions)),
+                                        .child(format!("−{}", diff_file.deletions)),
                                 ),
                         ),
                 )
@@ -1698,6 +1731,19 @@ mod tests {
         assert_eq!(layout.row_height, 14.);
         assert_eq!(layout.split_min_width, 200.);
         assert_eq!(layout.diff_padding_x, 0.);
+    }
+
+    #[test]
+    fn layout_defaults_keep_file_headers_compact_and_aligned() {
+        let layout = LayoutSettings::default();
+
+        assert_eq!(layout.diff_padding_x, 0.);
+        assert_eq!(layout.row_height, 22.);
+        assert_eq!(layout.file_header_height, 30.);
+        assert_eq!(layout.disclosure_size, 16.);
+        assert_eq!(layout.accepted_box_size, 14.);
+        assert_eq!(layout.file_action_width, 108.);
+        assert_eq!(layout.diff_stat_width, 48.);
     }
 
     #[test]
